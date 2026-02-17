@@ -14,6 +14,10 @@
         "type": "string",
         "description": "Optional bearer token for bridge control endpoints"
       },
+      "agentName": {
+        "type": "string",
+        "description": "Optional agent name used for default bot naming (<agent> Note Taker)"
+      },
       "allowRemoteBridge": {
         "type": "boolean",
         "description": "Allow non-private bridge hosts. Keep false unless you explicitly trust a remote endpoint."
@@ -28,6 +32,10 @@
     "bridgeToken": {
       "label": "Bridge Token",
       "help": "Optional bearer token if your bridge requires auth"
+    },
+    "agentName": {
+      "label": "Agent Name",
+      "help": "Optional fallback for bot naming if runtime context has no agent name."
     },
     "allowRemoteBridge": {
       "label": "Allow Remote Bridge",

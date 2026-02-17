@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.3] - 2026-02-17
+
+- Improved default bot naming: plugin now sends inferred agent name on launch
+- Bridge now accepts `agent_name` and uses `<agent> Note Taker` default when provided
+- Added plugin config override for `agentName`
+- Smoothed copilot message style to natural single-line coaching (no forced numbered format)
+- Reduced default reaction aggressiveness and disabled partial-triggered reactions by default
+
 ## [0.1.2] - 2026-02-17
 
 - Removed static browser launcher page from bridge service
