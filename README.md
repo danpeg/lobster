@@ -1,107 +1,243 @@
-# ClawPilot
+<h1 align="center">ClawPilot</h1>
 
-Let your OpenClaw join meetings and actively participate: do research, come up with ideas, create assets as you go.
+<p align="center">
+  <strong>Your AI copilot, live in every meeting.</strong>
+</p>
 
-ClawPilot connects Recall.ai live transcripts to OpenClaw so your copilot can react in real time during meetings.
+<p align="center">
+  <a href="https://www.npmjs.com/package/@clawpilot/clawpilot"><img src="https://img.shields.io/npm/v/@clawpilot/clawpilot?style=for-the-badge" alt="npm version"></a>
+  <a href="https://github.com/danpeg/clawpilot/actions/workflows/ci.yml?branch=main"><img src="https://img.shields.io/github/actions/workflow/status/danpeg/clawpilot/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
+</p>
 
-## Prerequisites
+<p align="center">
+  ClawPilot connects <a href="https://recall.ai">Recall.ai</a> live transcripts to <a href="https://openclaw.com">OpenClaw</a> so your AI copilot can join meetings, follow the conversation, and coach you in real time.
+</p>
 
-1. OpenClaw installed and working
-2. OpenClaw model/channel auth already configured
-3. Node.js 18+ on the bridge host
-4. Recall.ai account and API key
-5. Public HTTPS URL for Recall webhooks
+<p align="center">
+  <a href="#quick-start">Quick Start</a> · <a href="#commands">Commands</a> · <a href="#configuration">Configuration</a> · <a href="CONTRIBUTING.md">Contributing</a> · <a href="CHANGELOG.md">Changelog</a>
+</p>
 
-## Install ClawPilot Plugin
+---
+
+## Highlights
+
+- **Joins your meetings** — sends a Recall bot to Google Meet, Zoom, or Teams
+- **Listens in real time** — streams live transcripts via webhooks
+- **Coaches you as you go** — your copilot reacts with ideas, research, and suggestions mid-meeting
+- **Mirrors transcripts** — optionally echoes the raw conversation into your chat
+- **Meeting canvas** — live notes page with headings, action items, and decisions via SSE
+- **Security-first** — bridge restricted to private IPs, HMAC webhook verification, no env leaks
+
+All controlled from your OpenClaw chat with `/clawpilot` commands.
+
+## How it works
+
+```
+Google Meet / Zoom / Teams
+            │
+            ▼
+┌───────────────────────┐       webhook        ┌──────────────────────────┐
+│     Recall.ai Bot     │ ───────────────────▶  │    ClawPilot Bridge      │
+│  (joins & transcribes)│                       │       (Express)          │
+└───────────────────────┘                       │                          │
+                                                │  ┌─ transcript buffer    │
+                                                │  ├─ reaction engine      │
+                                                │  └─ meeting canvas (SSE) │
+                                                └────────────┬─────────────┘
+                                                             │
+                                                   /hooks/wake + /hooks/agent
+                                                             │
+                                                             ▼
+                                                ┌──────────────────────────┐
+                                                │       OpenClaw           │
+                                                │  (coaching responses in  │
+                                                │   WhatsApp / Telegram /  │
+                                                │   Slack / Discord / …)   │
+                                                └──────────────────────────┘
+
+┌───────────────────────┐
+│  OpenClaw Plugin      │       HTTP         ┌──────────────────────────┐
+│  /clawpilot join …    │ ─────────────────▶ │    ClawPilot Bridge      │
+│  /clawpilot pause     │                    │    (control endpoints)   │
+│  /clawpilot status    │                    └──────────────────────────┘
+└───────────────────────┘
+```
+
+## Quick Start
+
+### 1. Install the plugin
 
 ```bash
 openclaw plugins install @clawpilot/clawpilot
 openclaw daemon restart
-openclaw plugins info clawpilot
 ```
 
-## Configure Runtime (Required)
-
-Bootstrap your env file:
+### 2. Start the bridge
 
 ```bash
-./scripts/bootstrap-recall.sh
 cd services/clawpilot-bridge
+cp .env.example .env          # fill in your keys — see Configuration below
 set -a; source ./.env; set +a
-npm install
-npm start
+npm install && npm start
 ```
 
-Required environment variables:
+### 3. Verify
 
-1. `RECALL_API_KEY`
-2. `RECALL_API_BASE` (match your Recall workspace region)
-3. `WEBHOOK_SECRET`
-4. `WEBHOOK_BASE_URL`
-5. `OPENCLAW_HOOK_URL`
-6. `OPENCLAW_HOOK_TOKEN`
-
-## Verify End-to-End
-
-1. Bridge health:
 ```bash
-curl -s http://127.0.0.1:3001/health
+curl -s http://127.0.0.1:3001/health        # bridge health
+openclaw plugins info clawpilot              # plugin loaded
 ```
-2. Plugin loaded:
-```bash
-openclaw plugins info clawpilot
+
+### 4. Join a meeting
+
+In any OpenClaw chat:
+
 ```
-3. In OpenClaw chat, run:
-```text
-/clawpilot help
-```
-4. Launch a meeting bot directly from chat:
-```text
 /clawpilot join https://meet.google.com/abc-defg-hij
+/clawpilot join https://meet.google.com/abc-defg-hij --name "Team Note Taker"
 ```
-Optional custom name:
-```text
-/clawpilot join https://meet.google.com/abc-defg-hij --name "Dan Note Taker"
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `/clawpilot help` | Show available commands |
+| `/clawpilot join <url>` | Send a bot to join a meeting |
+| `/clawpilot pause` | Pause copilot reactions |
+| `/clawpilot resume` | Resume copilot reactions |
+| `/clawpilot transcript on\|off` | Toggle live transcript mirroring |
+| `/clawpilot status` | Check bridge and reaction state |
+
+## Configuration
+
+### Required
+
+| Variable | Description |
+|----------|-------------|
+| `RECALL_API_KEY` | Your Recall.ai API key |
+| `RECALL_API_BASE` | Region endpoint (e.g. `https://us-east-1.recall.ai`) |
+| `WEBHOOK_SECRET` | HMAC token for webhook verification |
+| `WEBHOOK_BASE_URL` | Public HTTPS URL where Recall sends webhooks |
+| `OPENCLAW_HOOK_URL` | OpenClaw hook injection endpoint |
+| `OPENCLAW_HOOK_TOKEN` | Auth token for OpenClaw hooks |
+
+### Reaction tuning
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PROACTIVITY_LEVEL` | `normal` | `low` / `normal` / `high` — controls cooldown, word thresholds, context window |
+| `REACT_ON_PARTIAL` | `false` | React to partial transcripts (increases token usage) |
+
+### Bot naming
+
+| Variable | Description |
+|----------|-------------|
+| `OPENCLAW_AGENT_NAME` | Default bot name becomes `<name> Note Taker` |
+| `RECALL_BOT_NAME` | Explicit bot name override |
+| `RECALL_BOT_NAME_SUFFIX` | Suffix (default: `Note Taker`) |
+
+Full list of 30+ options: [`services/clawpilot-bridge/.env.example`](services/clawpilot-bridge/.env.example)
+
+## Exposing the webhook endpoint
+
+Recall.ai sends transcript events to your bridge via HTTPS webhooks from the public internet. The bridge listens on HTTP (default port 3001), so you need a publicly reachable reverse proxy or tunnel in front of it.
+
+### Option 1: Cloudflare proxy (recommended)
+
+If your domain is already on Cloudflare, this is the quickest path. Add an A record pointing to your server, enable the orange-cloud proxy, and Cloudflare handles TLS termination:
+
 ```
-Toggle transcript mirroring in active chat:
-```text
-/clawpilot transcript on
-/clawpilot transcript off
+clawpilot.yourdomain.com  →  A  →  <your-server-ip>  (Proxied)
 ```
-5. Confirm transcripts trigger copilot responses.
 
-## Components
+The bridge stays HTTP internally — Cloudflare terminates TLS at the edge.
 
-1. `packages/clawpilot-plugin`: npm-installable OpenClaw plugin (`/clawpilot` command)
-2. `services/clawpilot-bridge`: Recall webhook receiver and OpenClaw hook bridge
+Set in your `.env`:
+```
+WEBHOOK_BASE_URL=https://clawpilot.yourdomain.com
+```
 
-## Security Notes
+### Option 2: Cloudflare Tunnel
 
-1. The plugin does not read environment variables at runtime.
-2. The plugin only calls your configured bridge endpoint for explicit `/clawpilot` commands.
-3. Non-private bridge hosts are blocked by default unless `allowRemoteBridge` is explicitly enabled.
+No open ports required. Install `cloudflared` and create a tunnel:
 
-## Branches
+```bash
+cloudflared tunnel create clawpilot
+cloudflared tunnel route dns clawpilot clawpilot.yourdomain.com
+cloudflared tunnel run --url http://127.0.0.1:3001 clawpilot
+```
 
-1. `main`: stable release path
-2. `experimental`: active development, includes Notion and Google Docs integrations
+### Option 3: Caddy
 
-## Release
+Automatic TLS via Let's Encrypt. Point a DNS record to your server (not proxied through Cloudflare — use a different domain or grey-cloud the record):
 
-1. Develop on `experimental`
-2. Merge curated changes to `main`
-3. Run checks:
-   - `npm run security:scan`
-   - `npm run check:plugin-pack`
-4. Publish plugin package from `packages/clawpilot-plugin`
+```
+# /etc/caddy/Caddyfile
+clawpilot.yourdomain.com {
+    reverse_proxy 127.0.0.1:3001
+}
+```
 
-See `RELEASING.md` for full steps.
+```bash
+sudo systemctl reload caddy
+```
 
-## Troubleshooting
+### Option 4: Nginx + certbot
 
-1. `plugin not found`:
-   restart OpenClaw daemon and run `openclaw plugins doctor`
-2. No copilot reaction:
-   verify bridge `.env` values and check bridge logs
-3. Recall webhook failures:
-   confirm `WEBHOOK_BASE_URL` is public HTTPS and reachable from Recall.ai
+More manual, but works everywhere:
+
+```nginx
+server {
+    server_name clawpilot.yourdomain.com;
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+```bash
+sudo certbot --nginx -d clawpilot.yourdomain.com
+```
+
+> **Note:** For local development without a public URL, the bridge includes a [polling fallback](services/clawpilot-bridge/poller.js) that fetches transcripts directly from the Recall API — no webhook endpoint needed.
+
+## Project structure
+
+```
+clawpilot/
+├─ packages/clawpilot-plugin/      OpenClaw plugin (npm package)
+│  ├─ index.js                     /clawpilot command handler
+│  └─ openclaw.plugin.json         plugin config schema
+├─ services/clawpilot-bridge/      Recall webhook receiver + reaction engine
+│  ├─ server.js                    Express server — webhooks, API, meeting canvas
+│  ├─ meeting-page.js              live meeting notes with SSE streaming
+│  ├─ gateway-client.js            WebSocket client for OpenClaw gateway
+│  └─ poller.js                    polling fallback (dev / no-webhook setups)
+└─ scripts/
+   ├─ bootstrap-recall.sh          interactive setup wizard
+   └─ scan-secrets.sh              pre-commit secret scanner
+```
+
+## Security
+
+- Plugin **never reads env variables** at runtime — no accidental secret exposure
+- Bridge restricted to **localhost + private IPs** by default (RFC 1918 + Tailscale)
+- Remote bridges require explicit `allowRemoteBridge: true` opt-in
+- Webhook payloads verified via **HMAC token**
+- Pre-commit scanning: `npm run security:scan`
+
+Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
+
+## Contributing
+
+Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, branch strategy, and PR guidelines.
+
+This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md) code of conduct.
+
+## License
+
+[MIT](LICENSE)

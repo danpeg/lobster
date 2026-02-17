@@ -49,6 +49,14 @@ npm start
 - Mirrors are routed via `/hooks/agent` with `channel=last` so they stay in the currently active chat program/channel
 - Optional Telegram mirror can be enabled with `DEBUG_MIRROR_TELEGRAM=true`
 
+## Webhook Endpoint (HTTPS)
+
+The bridge listens on HTTP. Recall.ai requires HTTPS for webhook delivery, so you need a reverse proxy or tunnel in front of the bridge.
+
+See the [main README — Exposing the webhook endpoint](../../README.md#exposing-the-webhook-endpoint) for setup options (Caddy, Cloudflare Tunnel, Nginx, Tailscale Funnel).
+
+For local development without a public URL, the bridge includes a [polling fallback](poller.js) that fetches transcripts directly from the Recall API.
+
 ## Health Check
 
 ```bash

@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main, experimental]
+  pull_request:
+    branches: [main, experimental]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [18, 20, 22]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install bridge dependencies
+        run: cd services/clawpilot-bridge && npm ci
+
+      - name: Security scan
+        run: npm run security:scan
+
+      - name: Check plugin pack
+        run: npm run check:plugin-pack
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan for secrets
+        run: npm run security:scan
