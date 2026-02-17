@@ -78,27 +78,32 @@ const MEETING_TRANSCRIPT_MAX_CHARS = Number(process.env.MEETING_TRANSCRIPT_MAX_C
 // Optional Telegram bridge settings for debug/typing feedback
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+const DEBUG_MIRROR_TELEGRAM = parseBooleanLike(process.env.DEBUG_MIRROR_TELEGRAM, false);
 const CONTROL_SPEAKER_REGEX = process.env.CONTROL_SPEAKER_REGEX || '';
 
-// Debug mode - send raw transcripts to Telegram
+// Debug mode - mirror raw final transcripts to active OpenClaw chat channel.
+// Optional Telegram mirroring can be enabled via DEBUG_MIRROR_TELEGRAM=true.
 let DEBUG_MODE = parseBooleanLike(process.env.DEBUG_MODE, false);
 
 // Mute mode - stop processing transcripts (save tokens)
 let IS_MUTED = false;
 
 async function sendDebugTranscript(speaker, text, isPartial) {
-  if (!DEBUG_MODE || !TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
-  
+  if (!DEBUG_MODE) return;
+
+  const prefix = isPartial ? '[RAW PARTIAL]' : '[RAW FINAL]';
+  await sendToOpenClaw(`${prefix} ${speaker}: ${text}`);
+
+  if (!DEBUG_MIRROR_TELEGRAM || !TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
   try {
     const https = require('https');
     const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-    const prefix = isPartial ? '🔄' : '✅';
-    const postData = JSON.stringify({ 
+    const postData = JSON.stringify({
       chat_id: TELEGRAM_CHAT_ID,
       text: `${prefix} ${speaker}: ${text}`,
-      disable_notification: true  // Silent to avoid spam
+      disable_notification: true
     });
-    
+
     const req = https.request(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }}, () => {});
     req.on('error', () => {});
     req.write(postData);
@@ -206,7 +211,7 @@ function parseTranscriptControlCommand(speaker, text) {
     return { type: 'unmute', ack: 'Unmuted meeting copilot. I am processing transcripts again.' };
   }
   if (['/meetverbose on', 'meetverbose on', 'verbose on', 'transcript debug on'].includes(normalized)) {
-    return { type: 'meetverbose_on', ack: 'Transcript debug is ON. Final transcript lines will be mirrored to chat.' };
+    return { type: 'meetverbose_on', ack: 'Transcript debug is ON. Final transcript lines will be mirrored to the active chat channel.' };
   }
   if (['/meetverbose off', 'meetverbose off', 'verbose off', 'transcript debug off'].includes(normalized)) {
     return { type: 'meetverbose_off', ack: 'Transcript debug is OFF. I will send only copilot guidance.' };
@@ -1114,7 +1119,13 @@ async function sendToOpenClaw(message) {
       },
       body: JSON.stringify({ text, mode: "now" })
     });
-    const result = await response.json();
+    const raw = await response.text();
+    let result;
+    try {
+      result = JSON.parse(raw);
+    } catch {
+      result = { ok: response.ok, raw };
+    }
     const elapsed = Date.now() - sendStart;
     console.log(`[FastInject] ${elapsed}ms - ${result.ok ? "success" : "failed"}`);
     return elapsed;
@@ -1127,12 +1138,12 @@ async function sendToOpenClaw(message) {
 // Meeting verbose mode toggle endpoints
 app.post('/meetverbose/on', (req, res) => {
   const state = setMeetVerboseState(true, 'http:/meetverbose/on');
-  res.json({ ...state, message: 'Raw transcripts ON' });
+  res.json({ ...state, message: 'Raw transcript mirror ON (active chat channel)' });
 });
 
 app.post('/meetverbose/off', (req, res) => {
   const state = setMeetVerboseState(false, 'http:/meetverbose/off');
-  res.json({ ...state, message: 'Raw transcripts OFF - smart feedback only' });
+  res.json({ ...state, message: 'Raw transcript mirror OFF - smart feedback only' });
 });
 
 app.get('/meetverbose', (req, res) => {
@@ -1158,7 +1169,11 @@ app.post('/meetverbose', (req, res) => {
     setMeetVerboseState(nextValue, 'http:/meetverbose');
   }
 
-  res.json({ meetverbose: DEBUG_MODE, muted: IS_MUTED, message: DEBUG_MODE ? 'Raw transcripts ON' : 'Raw transcripts OFF' });
+  res.json({
+    meetverbose: DEBUG_MODE,
+    muted: IS_MUTED,
+    message: DEBUG_MODE ? 'Raw transcript mirror ON (active chat channel)' : 'Raw transcript mirror OFF'
+  });
 });
 
 // ============ NOTION INTEGRATION ============
