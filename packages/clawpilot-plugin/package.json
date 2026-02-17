@@ -1,7 +1,7 @@
 {
-  "name": "@curious-endeavor/clawpilot",
+  "name": "@clawpilot/clawpilot",
   "version": "0.1.0",
-  "description": "OpenClaw plugin for controlling a Recall.ai meeting copilot bridge",
+  "description": "Let your OpenClaw join meetings and actively participate: do research, come up with ideas, create assets as you go.",
   "type": "module",
   "openclaw": {
     "extensions": [
