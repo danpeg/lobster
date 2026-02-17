@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Recall.ai Webhook Receiver
- * Receives real-time transcripts and sends reactions to Dan via OpenClaw
+ * Receives real-time transcripts and sends copilot reactions via OpenClaw
  */
 
 const express = require('express');

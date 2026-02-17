@@ -5,8 +5,8 @@ const path = require('path');
 
 const TEST_PORT = Number(process.env.TEST_PORT || 3301);
 const HOOK_HOST = '127.0.0.1';
-const WEBHOOK_SECRET = 'test-webhook-secret';
-const HOOK_TOKEN = 'test-openclaw-hook-token';
+const WEBHOOK_SECRET = 'fixture-webhook-secret';
+const HOOK_TOKEN = 'fixture-openclaw-hook-token';
 const TIMEOUT_MS = Number(process.env.TEST_TIMEOUT_MS || 12000);
 
 function sleep(ms) {
@@ -162,7 +162,7 @@ async function main() {
 
     const transcriptWords = [
       'hello', 'team', 'this', 'is', 'a', 'live', 'integration', 'test', 'for', 'meeting',
-      'copilot', 'please', 'suggest', 'one', 'actionable', 'next', 'step', 'for', 'dan',
+      'copilot', 'please', 'suggest', 'one', 'actionable', 'next', 'step', 'for', 'the', 'host',
       'right', 'now', 'thanks',
     ];
 

@@ -1,27 +1,28 @@
 # ClawPilot
 
-Real-time meeting transcript analysis with Recall.ai + OpenClaw.
+Let your OpenClaw join meetings and actively participate: do research, come up with ideas, create assets as you go.
 
-## Branch Model
+ClawPilot connects Recall.ai live transcripts to OpenClaw so your copilot can react in real time during meetings.
 
-- `main`: stable release path
-- `experimental`: active development, including Notion and Google Docs integrations
+## Prerequisites
 
-Both branches are public-safe only (no secrets in code).
+1. OpenClaw installed and working
+2. OpenClaw model/channel auth already configured
+3. Node.js 18+ on the bridge host
+4. Recall.ai account and API key
+5. Public HTTPS URL for Recall webhooks
 
-## Install (Plugin)
+## Install ClawPilot Plugin
 
 ```bash
-openclaw plugins install @curious-endeavor/clawpilot
+openclaw plugins install @clawpilot/clawpilot
 openclaw daemon restart
 openclaw plugins info clawpilot
 ```
 
-## Required Runtime Setup
+## Configure Runtime (Required)
 
-OpenClaw auth/channel setup is assumed to be already configured.
-
-Then configure Recall + bridge service:
+Bootstrap your env file:
 
 ```bash
 ./scripts/bootstrap-recall.sh
@@ -31,10 +32,39 @@ npm install
 npm start
 ```
 
+Required environment variables:
+
+1. `RECALL_API_KEY`
+2. `WEBHOOK_SECRET`
+3. `WEBHOOK_BASE_URL`
+4. `OPENCLAW_HOOK_URL`
+5. `OPENCLAW_HOOK_TOKEN`
+
+## Verify End-to-End
+
+1. Bridge health:
+```bash
+curl -s http://127.0.0.1:3001/health
+```
+2. Plugin loaded:
+```bash
+openclaw plugins info clawpilot
+```
+3. In OpenClaw chat, run:
+```text
+/clawpilot status
+```
+4. Start a Recall bot into a meeting and confirm transcripts trigger copilot responses.
+
 ## Components
 
-- `packages/clawpilot-plugin`: npm-installable OpenClaw plugin
-- `services/clawpilot-bridge`: Recall webhook receiver and copilot bridge service
+1. `packages/clawpilot-plugin`: npm-installable OpenClaw plugin (`/clawpilot` command)
+2. `services/clawpilot-bridge`: Recall webhook receiver and OpenClaw hook bridge
+
+## Branches
+
+1. `main`: stable release path
+2. `experimental`: active development, includes Notion and Google Docs integrations
 
 ## Release
 
@@ -46,3 +76,12 @@ npm start
 4. Publish plugin package from `packages/clawpilot-plugin`
 
 See `RELEASING.md` for full steps.
+
+## Troubleshooting
+
+1. `plugin not found`:
+   restart OpenClaw daemon and run `openclaw plugins doctor`
+2. No copilot reaction:
+   verify bridge `.env` values and check bridge logs
+3. Recall webhook failures:
+   confirm `WEBHOOK_BASE_URL` is public HTTPS and reachable from Recall.ai

@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source /root/.recall-env
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="${SCRIPT_DIR}/.env"
+if [[ -f "$ENV_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+fi
 
 RAW_INPUT="${*:-}"
 DRY_RUN="${DRY_RUN:-false}"
@@ -104,12 +109,12 @@ if [[ -z "$MEETING_URL" ]]; then
 fi
 
 if [[ -z "${RECALL_API_KEY:-}" ]]; then
-  echo "Error: RECALL_API_KEY missing in /root/.recall-env"
+  echo "Error: RECALL_API_KEY is not set (export it or define it in ${ENV_FILE})"
   exit 1
 fi
 
 if [[ -z "${WEBHOOK_SECRET:-}" ]]; then
-  echo "Error: WEBHOOK_SECRET missing in /root/.recall-env"
+  echo "Error: WEBHOOK_SECRET is not set (export it or define it in ${ENV_FILE})"
   exit 1
 fi
 
