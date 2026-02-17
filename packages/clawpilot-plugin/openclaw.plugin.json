@@ -1,6 +1,6 @@
 {
-  "id": "recall-copilot",
-  "name": "Recall Copilot",
+  "id": "clawpilot",
+  "name": "ClawPilot",
   "description": "Control and inspect the Recall transcript copilot bridge.",
   "configSchema": {
     "type": "object",

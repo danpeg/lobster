@@ -1,4 +1,4 @@
-const PLUGIN_ID = 'recall-copilot';
+const PLUGIN_ID = 'clawpilot';
 
 function loadBridgeConfig(api) {
   const cfg = api.runtime.config.loadConfig();
@@ -28,7 +28,7 @@ async function callBridge(api, path, method = 'GET') {
 
 export default function register(api) {
   api.registerCommand({
-    name: 'copilot',
+    name: 'clawpilot',
     description: 'Control Recall copilot bridge: status | mute | unmute | verbose-on | verbose-off',
     acceptsArgs: true,
     handler: async (ctx) => {
@@ -37,7 +37,7 @@ export default function register(api) {
       try {
         if (!action || action === 'status') {
           const status = await callBridge(api, '/copilot/status');
-          return { text: `Copilot status:\n${JSON.stringify(status, null, 2)}` };
+          return { text: `ClawPilot status:\n${JSON.stringify(status, null, 2)}` };
         }
         if (action === 'mute') {
           const result = await callBridge(api, '/mute', 'POST');
@@ -58,7 +58,7 @@ export default function register(api) {
 
         return {
           text: [
-            'Usage: /copilot <action>',
+            'Usage: /clawpilot <action>',
             '',
             'Actions:',
             '- status',
@@ -69,7 +69,7 @@ export default function register(api) {
           ].join('\n'),
         };
       } catch (err) {
-        return { text: `Copilot command failed: ${err.message}` };
+        return { text: `ClawPilot command failed: ${err.message}` };
       }
     },
   });

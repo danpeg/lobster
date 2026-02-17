@@ -1,4 +1,4 @@
-# OpenClaw Meeting Copilot
+# ClawPilot
 
 Real-time meeting transcript analysis with Recall.ai + OpenClaw.
 
@@ -12,9 +12,9 @@ Both branches are public-safe only (no secrets in code).
 ## Install (Plugin)
 
 ```bash
-openclaw plugins install @curious-endeavor/recall-copilot
+openclaw plugins install @curious-endeavor/clawpilot
 openclaw daemon restart
-openclaw plugins info recall-copilot
+openclaw plugins info clawpilot
 ```
 
 ## Required Runtime Setup
@@ -25,7 +25,7 @@ Then configure Recall + bridge service:
 
 ```bash
 ./scripts/bootstrap-recall.sh
-cd services/recall-bridge
+cd services/clawpilot-bridge
 set -a; source ./.env; set +a
 npm install
 npm start
@@ -33,8 +33,8 @@ npm start
 
 ## Components
 
-- `packages/openclaw-recall-copilot-plugin`: npm-installable OpenClaw plugin
-- `services/recall-bridge`: Recall webhook receiver and copilot bridge service
+- `packages/clawpilot-plugin`: npm-installable OpenClaw plugin
+- `services/clawpilot-bridge`: Recall webhook receiver and copilot bridge service
 
 ## Release
 
@@ -43,6 +43,6 @@ npm start
 3. Run checks:
    - `npm run security:scan`
    - `npm run check:plugin-pack`
-4. Publish plugin package from `packages/openclaw-recall-copilot-plugin`
+4. Publish plugin package from `packages/clawpilot-plugin`
 
 See `RELEASING.md` for full steps.
