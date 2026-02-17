@@ -81,7 +81,7 @@ function extractMeetingUrl(text) {
   }
 }
 
-function parseLaunchArgs(raw) {
+function parseJoinArgs(raw) {
   const input = String(raw || '').trim();
   const nameFlag = /\s--name\s+/i;
   if (!nameFlag.test(input)) {
@@ -96,6 +96,36 @@ function parseLaunchArgs(raw) {
     meetingUrl: extractMeetingUrl(meetingPart),
     botName: unwrappedName,
   };
+}
+
+function buildHelpText() {
+  return [
+    'ClawPilot commands:',
+    '',
+    '/clawpilot help',
+    '  Show available commands and examples.',
+    '',
+    '/clawpilot status',
+    '  Show bridge + copilot status.',
+    '',
+    '/clawpilot join <meeting_url> [--name "Bot Name"]',
+    '  Join a meeting with Recall bot.',
+    '',
+    '/clawpilot pause',
+    '  Pause transcript processing and reactions.',
+    '',
+    '/clawpilot resume',
+    '  Resume transcript processing and reactions.',
+    '',
+    '/clawpilot transcript on',
+    '/clawpilot transcript off',
+    '  Toggle raw transcript mirroring in active chat channel.',
+    '',
+    'Examples:',
+    '/clawpilot join https://meet.google.com/abc-defg-hij',
+    '/clawpilot join https://meet.google.com/abc-defg-hij --name "Sunny Note Taker"',
+    '/clawpilot transcript on',
+  ].join('\n');
 }
 
 function inferAgentName(api, ctx) {
@@ -161,27 +191,32 @@ async function callBridge(api, path, options = 'GET') {
 export default function register(api) {
   api.registerCommand({
     name: 'clawpilot',
-    description: 'Control Recall copilot bridge: status | launch | mute | unmute | verbose-on | verbose-off',
+    description: 'Control ClawPilot: help | status | join | pause | resume | transcript on|off',
     acceptsArgs: true,
     handler: async (ctx) => {
       const rawArgs = (ctx.args || '').trim();
-      const [rawAction, ...rest] = rawArgs ? rawArgs.split(/\s+/) : ['status'];
-      const action = (rawAction || 'status').toLowerCase();
+      const [rawAction, ...rest] = rawArgs ? rawArgs.split(/\s+/) : ['help'];
+      const action = (rawAction || 'help').toLowerCase();
       const actionArgs = rest.join(' ').trim();
 
       try {
-        if (!action || action === 'status') {
+        if (!action || action === 'help') {
+          return { text: buildHelpText() };
+        }
+
+        if (action === 'status') {
           const status = await callBridge(api, '/copilot/status');
           return { text: `ClawPilot status:\n${JSON.stringify(status, null, 2)}` };
         }
-        if (action === 'launch') {
-          const parsed = parseLaunchArgs(actionArgs);
+
+        if (action === 'join') {
+          const parsed = parseJoinArgs(actionArgs);
           if (!parsed.meetingUrl) {
             return {
               text: [
                 'Usage:',
-                '/clawpilot launch <meeting_url>',
-                '/clawpilot launch <meeting_url> --name "Custom Bot Name"',
+                '/clawpilot join <meeting_url>',
+                '/clawpilot join <meeting_url> --name "Custom Bot Name"',
                 '',
                 'Supported: Google Meet, Zoom, Microsoft Teams',
               ].join('\n'),
@@ -196,36 +231,43 @@ export default function register(api) {
           }
           const result = await callBridge(api, '/launch', { method: 'POST', body: payload });
           const launchedName = result?.bot_name ? ` (${result.bot_name})` : '';
-          return { text: `Launch requested${launchedName}.\n${JSON.stringify(result, null, 2)}` };
+          return { text: `Join requested${launchedName}.\n${JSON.stringify(result, null, 2)}` };
         }
-        if (action === 'mute') {
+
+        if (action === 'pause') {
           const result = await callBridge(api, '/mute', 'POST');
-          return { text: `Muted.\n${JSON.stringify(result, null, 2)}` };
+          return { text: `Paused.\n${JSON.stringify(result, null, 2)}` };
         }
-        if (action === 'unmute') {
+
+        if (action === 'resume') {
           const result = await callBridge(api, '/unmute', 'POST');
-          return { text: `Unmuted.\n${JSON.stringify(result, null, 2)}` };
+          return { text: `Resumed.\n${JSON.stringify(result, null, 2)}` };
         }
-        if (action === 'verbose-on') {
-          const result = await callBridge(api, '/meetverbose/on', 'POST');
-          return { text: `Verbose ON.\n${JSON.stringify(result, null, 2)}` };
-        }
-        if (action === 'verbose-off') {
-          const result = await callBridge(api, '/meetverbose/off', 'POST');
-          return { text: `Verbose OFF.\n${JSON.stringify(result, null, 2)}` };
+
+        if (action === 'transcript') {
+          const mode = (rest[0] || '').toLowerCase();
+          if (mode === 'on') {
+            const result = await callBridge(api, '/meetverbose/on', 'POST');
+            return { text: `Transcript mirror ON.\n${JSON.stringify(result, null, 2)}` };
+          }
+          if (mode === 'off') {
+            const result = await callBridge(api, '/meetverbose/off', 'POST');
+            return { text: `Transcript mirror OFF.\n${JSON.stringify(result, null, 2)}` };
+          }
+          return {
+            text: [
+              'Usage:',
+              '/clawpilot transcript on',
+              '/clawpilot transcript off',
+            ].join('\n'),
+          };
         }
 
         return {
           text: [
-            'Usage: /clawpilot <action>',
+            `Unknown command: ${action}`,
             '',
-            'Actions:',
-            '- status',
-            '- launch <meeting_url> [--name "Bot Name"]',
-            '- mute',
-            '- unmute',
-            '- verbose-on',
-            '- verbose-off',
+            buildHelpText(),
           ].join('\n'),
         };
       } catch (err) {

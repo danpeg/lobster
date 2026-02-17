@@ -53,15 +53,20 @@ openclaw plugins info clawpilot
 ```
 3. In OpenClaw chat, run:
 ```text
-/clawpilot status
+/clawpilot help
 ```
 4. Launch a meeting bot directly from chat:
 ```text
-/clawpilot launch https://meet.google.com/abc-defg-hij
+/clawpilot join https://meet.google.com/abc-defg-hij
 ```
 Optional custom name:
 ```text
-/clawpilot launch https://meet.google.com/abc-defg-hij --name "Dan Note Taker"
+/clawpilot join https://meet.google.com/abc-defg-hij --name "Dan Note Taker"
+```
+Toggle transcript mirroring in active chat:
+```text
+/clawpilot transcript on
+/clawpilot transcript off
 ```
 5. Confirm transcripts trigger copilot responses.
 

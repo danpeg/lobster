@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0] - 2026-02-17
+
+- Consolidated plugin command UX to strict `/clawpilot <command>` verbs
+- Added `/clawpilot help` as the default command
+- Replaced command names:
+  - `launch` -> `join`
+  - `mute` -> `pause`
+  - `unmute` -> `resume`
+  - `verbose-on|verbose-off` -> `transcript on|off`
+- Removed legacy command aliases in plugin routing
+
 ## [0.1.6] - 2026-02-17
 
 - Changed verbose transcript mirroring to use OpenClaw `/hooks/agent` with `channel=last`
