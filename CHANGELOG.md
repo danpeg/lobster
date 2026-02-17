@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.5] - 2026-02-17
+
+- Added `RECALL_API_BASE` env support for region-specific Recall workspaces
+- Removed hardcoded `eu-central-1` Recall endpoints in bridge and launch scripts
+- Made `meetverbose` mirror behavior channel-agnostic by default via OpenClaw hook injection
+
 ## [0.1.4] - 2026-02-17
 
 - Changed `meetverbose` behavior to mirror raw transcript lines through OpenClaw hook injection

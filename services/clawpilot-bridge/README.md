@@ -25,6 +25,7 @@ npm start
 ## Required Environment Variables
 
 - `RECALL_API_KEY`
+- `RECALL_API_BASE` (region endpoint, e.g. `https://us-east-1.recall.ai` or `https://eu-central-1.recall.ai`)
 - `WEBHOOK_SECRET`
 - `WEBHOOK_BASE_URL`
 - `OPENCLAW_HOOK_URL`
