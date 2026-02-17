@@ -10,6 +10,9 @@ fi
 
 RAW_INPUT="${*:-}"
 DRY_RUN="${DRY_RUN:-false}"
+RECALL_API_BASE="${RECALL_API_BASE:-https://eu-central-1.recall.ai}"
+RECALL_API_BASE="${RECALL_API_BASE%/}"
+RECALL_BOT_API="${RECALL_API_BASE}/api/v1/bot"
 RECALL_STT_MODE="${RECALL_STT_MODE:-prioritize_low_latency}"
 RECALL_LANGUAGE_CODE="${RECALL_LANGUAGE_CODE:-en}"
 REPLACE_ACTIVE_ON_DUPLICATE="${REPLACE_ACTIVE_ON_DUPLICATE:-true}"
@@ -74,7 +77,7 @@ is_terminal_status() {
 
 get_bot_status_code() {
   local bot_id="$1"
-  curl -fsS "https://eu-central-1.recall.ai/api/v1/bot/${bot_id}" \
+  curl -fsS "${RECALL_BOT_API}/${bot_id}" \
     -H "Authorization: Token ${RECALL_API_KEY}" \
     | jq -r '.status_changes[-1].code // "unknown"' 2>/dev/null || echo "unknown"
 }
@@ -82,7 +85,7 @@ get_bot_status_code() {
 remove_bot_from_call() {
   local bot_id="$1"
   local raw http body err_code
-  raw="$(curl -sS -w '\n%{http_code}' -X POST "https://eu-central-1.recall.ai/api/v1/bot/${bot_id}/leave_call/" \
+  raw="$(curl -sS -w '\n%{http_code}' -X POST "${RECALL_BOT_API}/${bot_id}/leave_call/" \
     -H "Authorization: Token ${RECALL_API_KEY}" \
     -H "Content-Type: application/json" || true)"
   http="${raw##*$'\n'}"
@@ -162,7 +165,7 @@ replaced_bot_id=''
 
 if [[ "$MEETING_PLATFORM" != "unknown" && -n "$MEETING_ID" ]]; then
   active_bot_json=''
-  if list_json="$(curl -fsS "https://eu-central-1.recall.ai/api/v1/bot/?page_size=100" \
+  if list_json="$(curl -fsS "${RECALL_BOT_API}/?page_size=100" \
     -H "Authorization: Token ${RECALL_API_KEY}" 2>/dev/null)"; then
     active_bot_json="$(printf '%s' "$list_json" | jq -c \
       --arg platform "$MEETING_PLATFORM" \
@@ -239,7 +242,7 @@ if [[ "$DRY_RUN" == "true" ]]; then
   exit 0
 fi
 
-response="$(curl -sS -X POST "https://eu-central-1.recall.ai/api/v1/bot" \
+response="$(curl -sS -X POST "${RECALL_BOT_API}" \
   -H "Authorization: Token ${RECALL_API_KEY}" \
   -H "Content-Type: application/json" \
   -d "$payload")"

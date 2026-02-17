@@ -35,10 +35,11 @@ npm start
 Required environment variables:
 
 1. `RECALL_API_KEY`
-2. `WEBHOOK_SECRET`
-3. `WEBHOOK_BASE_URL`
-4. `OPENCLAW_HOOK_URL`
-5. `OPENCLAW_HOOK_TOKEN`
+2. `RECALL_API_BASE` (match your Recall workspace region)
+3. `WEBHOOK_SECRET`
+4. `WEBHOOK_BASE_URL`
+5. `OPENCLAW_HOOK_URL`
+6. `OPENCLAW_HOOK_TOKEN`
 
 ## Verify End-to-End
 

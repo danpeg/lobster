@@ -64,6 +64,8 @@ const RECALL_API_KEY = process.env.RECALL_API_KEY;
 // Webhook secret for verifying incoming requests
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 const WEBHOOK_BASE_URL = process.env.WEBHOOK_BASE_URL || `http://127.0.0.1:${PORT}`;
+const RECALL_API_BASE = String(process.env.RECALL_API_BASE || 'https://eu-central-1.recall.ai').replace(/\/+$/, '');
+const RECALL_BOTS_ENDPOINT = `${RECALL_API_BASE}/api/v1/bot`;
 const DEFAULT_RECALL_LANGUAGE = process.env.RECALL_LANGUAGE_CODE || 'en';
 const DEFAULT_RECALL_STT_MODE = process.env.RECALL_STT_MODE || 'prioritize_low_latency';
 const OPENCLAW_HOOK_URL = process.env.OPENCLAW_HOOK_URL || 'http://127.0.0.1:18789/hooks/wake';
@@ -374,7 +376,7 @@ async function hydrateBotSessionFromApi(botId) {
 
   const lookupPromise = (async () => {
     try {
-      const response = await fetch(`https://eu-central-1.recall.ai/api/v1/bot/${botId}`, {
+      const response = await fetch(`${RECALL_BOTS_ENDPOINT}/${botId}`, {
         headers: {
           Authorization: `Token ${RECALL_API_KEY}`
         }
@@ -453,7 +455,7 @@ async function findActiveBotForMeeting(meetingUrl) {
     return null;
   }
   try {
-    const response = await fetch('https://eu-central-1.recall.ai/api/v1/bot/?page_size=100', {
+    const response = await fetch(`${RECALL_BOTS_ENDPOINT}/?page_size=100`, {
       headers: {
         Authorization: `Token ${RECALL_API_KEY}`
       }
@@ -484,7 +486,7 @@ function isTerminalBotCode(code) {
 
 async function getBotStatusCode(botId) {
   try {
-    const response = await fetch(`https://eu-central-1.recall.ai/api/v1/bot/${botId}`, {
+    const response = await fetch(`${RECALL_BOTS_ENDPOINT}/${botId}`, {
       headers: {
         Authorization: `Token ${RECALL_API_KEY}`
       }
@@ -501,7 +503,7 @@ async function getBotStatusCode(botId) {
 
 async function removeBotFromCall(botId) {
   try {
-    const response = await fetch(`https://eu-central-1.recall.ai/api/v1/bot/${botId}/leave_call/`, {
+    const response = await fetch(`${RECALL_BOTS_ENDPOINT}/${botId}/leave_call/`, {
       method: 'POST',
       headers: {
         Authorization: `Token ${RECALL_API_KEY}`,
@@ -628,49 +630,30 @@ app.post('/launch', async (req, res) => {
   };
 
   try {
-    const https = require('https');
-    const postData = JSON.stringify(body);
-    
-    const options = {
-      hostname: 'eu-central-1.recall.ai',
-      port: 443,
-      path: '/api/v1/bot/',
+    const response = await fetch(`${RECALL_BOTS_ENDPOINT}/`, {
       method: 'POST',
       headers: {
         'Authorization': `Token ${RECALL_API_KEY}`,
         'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData),
         'User-Agent': 'ClawPilot-Bridge/1.0'
+      },
+      body: JSON.stringify(body)
+    });
+
+    const data = await response.text();
+    try {
+      const json = JSON.parse(data);
+      if (replacedFromBotId) {
+        json.replaced_from_bot_id = replacedFromBotId;
       }
-    };
-
-    const proxyReq = https.request(options, (proxyRes) => {
-      let data = '';
-      proxyRes.on('data', chunk => data += chunk);
-      proxyRes.on('end', () => {
-        try {
-          const json = JSON.parse(data);
-          if (replacedFromBotId) {
-            json.replaced_from_bot_id = replacedFromBotId;
-          }
-          if (proxyRes.statusCode >= 200 && proxyRes.statusCode < 300 && json?.id) {
-            rememberBotSession(json.id, launchSessionId);
-            json.meeting_session = normalizeMeetingSessionId(launchSessionId);
-          }
-          res.status(proxyRes.statusCode).json(json);
-        } catch (e) {
-          res.status(proxyRes.statusCode).send(data);
-        }
-      });
-    });
-
-    proxyReq.on('error', (e) => {
-      console.error('Proxy request error:', e);
-      res.status(500).json({ error: e.message });
-    });
-
-    proxyReq.write(postData);
-    proxyReq.end();
+      if (response.status >= 200 && response.status < 300 && json?.id) {
+        rememberBotSession(json.id, launchSessionId);
+        json.meeting_session = normalizeMeetingSessionId(launchSessionId);
+      }
+      return res.status(response.status).json(json);
+    } catch (e) {
+      return res.status(response.status).send(data);
+    }
   } catch (err) {
     console.error('Launch error:', err);
     res.status(500).json({ error: err.message });
