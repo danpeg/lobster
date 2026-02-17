@@ -42,6 +42,12 @@ npm start
 - Output is a single natural coaching line (no forced numbered format)
 - Default proactivity is `normal` to reduce chat spam
 
+## Verbose Mode Behavior
+
+- `meetverbose` mirrors raw final transcript lines through OpenClaw hook injection
+- This keeps transcript mirrors in the same active chat program/channel as copilot reactions
+- Optional Telegram mirror can be enabled with `DEBUG_MIRROR_TELEGRAM=true`
+
 ## Health Check
 
 ```bash

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4] - 2026-02-17
+
+- Changed `meetverbose` behavior to mirror raw transcript lines through OpenClaw hook injection
+- Raw transcript mirrors now follow the active chat channel/program instead of Telegram-only behavior
+- Added optional `DEBUG_MIRROR_TELEGRAM` for secondary Telegram mirroring
+- Improved hook response parsing to handle non-JSON error responses safely
+
 ## [0.1.3] - 2026-02-17
 
 - Improved default bot naming: plugin now sends inferred agent name on launch
