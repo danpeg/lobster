@@ -61,6 +61,12 @@ openclaw plugins info clawpilot
 1. `packages/clawpilot-plugin`: npm-installable OpenClaw plugin (`/clawpilot` command)
 2. `services/clawpilot-bridge`: Recall webhook receiver and OpenClaw hook bridge
 
+## Security Notes
+
+1. The plugin does not read environment variables at runtime.
+2. The plugin only calls your configured bridge endpoint for explicit `/clawpilot` commands.
+3. Non-private bridge hosts are blocked by default unless `allowRemoteBridge` is explicitly enabled.
+
 ## Branches
 
 1. `main`: stable release path

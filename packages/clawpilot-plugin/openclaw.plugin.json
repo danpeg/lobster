@@ -13,6 +13,10 @@
       "bridgeToken": {
         "type": "string",
         "description": "Optional bearer token for bridge control endpoints"
+      },
+      "allowRemoteBridge": {
+        "type": "boolean",
+        "description": "Allow non-private bridge hosts. Keep false unless you explicitly trust a remote endpoint."
       }
     }
   },
@@ -24,6 +28,10 @@
     "bridgeToken": {
       "label": "Bridge Token",
       "help": "Optional bearer token if your bridge requires auth"
+    },
+    "allowRemoteBridge": {
+      "label": "Allow Remote Bridge",
+      "help": "Off by default. Enable only for trusted non-private endpoints."
     }
   }
 }
