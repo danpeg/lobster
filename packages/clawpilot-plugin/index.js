@@ -51,36 +51,104 @@ function loadBridgeConfig(api) {
   return { bridgeBaseUrl, bridgeToken };
 }
 
-async function callBridge(api, path, method = 'GET') {
+function extractMeetingUrl(text) {
+  const input = String(text || '');
+  const match = input.match(/https?:\/\/[^\s<>"']+/i);
+  if (!match) return null;
+  const url = match[0];
+  const allowedMeetingHost = /(meet\.google\.com|([a-z0-9-]+\.)?zoom\.us|teams\.microsoft\.com|teams\.live\.com)$/i;
+  try {
+    const parsed = new URL(url);
+    return allowedMeetingHost.test(parsed.hostname) ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseLaunchArgs(raw) {
+  const input = String(raw || '').trim();
+  const nameFlag = /\s--name\s+/i;
+  if (!nameFlag.test(input)) {
+    return { meetingUrl: extractMeetingUrl(input), botName: '' };
+  }
+
+  const parts = input.split(nameFlag);
+  const meetingPart = parts[0] || '';
+  const namePart = (parts.slice(1).join(' ') || '').trim();
+  const unwrappedName = namePart.replace(/^["']|["']$/g, '').trim();
+  return {
+    meetingUrl: extractMeetingUrl(meetingPart),
+    botName: unwrappedName,
+  };
+}
+
+async function callBridge(api, path, options = 'GET') {
+  let method = 'GET';
+  let body;
+  if (typeof options === 'string') {
+    method = options;
+  } else if (options && typeof options === 'object') {
+    method = options.method || 'GET';
+    body = options.body;
+  }
+
   const { bridgeBaseUrl, bridgeToken } = loadBridgeConfig(api);
   const headers = { 'Content-Type': 'application/json' };
   if (bridgeToken) headers.Authorization = `Bearer ${bridgeToken}`;
 
-  const res = await fetch(`${bridgeBaseUrl}${path}`, { method, headers });
+  const request = { method, headers };
+  if (body !== undefined) {
+    request.body = JSON.stringify(body);
+  }
+
+  const res = await fetch(`${bridgeBaseUrl}${path}`, request);
   const text = await res.text();
-  let body = text;
+  let responseBody = text;
   try {
-    body = JSON.parse(text);
+    responseBody = JSON.parse(text);
   } catch {}
 
   if (!res.ok) {
-    throw new Error(`Bridge call failed (${res.status}): ${typeof body === 'string' ? body : JSON.stringify(body)}`);
+    throw new Error(`Bridge call failed (${res.status}): ${typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)}`);
   }
-  return body;
+  return responseBody;
 }
 
 export default function register(api) {
   api.registerCommand({
     name: 'clawpilot',
-    description: 'Control Recall copilot bridge: status | mute | unmute | verbose-on | verbose-off',
+    description: 'Control Recall copilot bridge: status | launch | mute | unmute | verbose-on | verbose-off',
     acceptsArgs: true,
     handler: async (ctx) => {
-      const action = (ctx.args || 'status').trim().toLowerCase();
+      const rawArgs = (ctx.args || '').trim();
+      const [rawAction, ...rest] = rawArgs ? rawArgs.split(/\s+/) : ['status'];
+      const action = (rawAction || 'status').toLowerCase();
+      const actionArgs = rest.join(' ').trim();
 
       try {
         if (!action || action === 'status') {
           const status = await callBridge(api, '/copilot/status');
           return { text: `ClawPilot status:\n${JSON.stringify(status, null, 2)}` };
+        }
+        if (action === 'launch') {
+          const parsed = parseLaunchArgs(actionArgs);
+          if (!parsed.meetingUrl) {
+            return {
+              text: [
+                'Usage:',
+                '/clawpilot launch <meeting_url>',
+                '/clawpilot launch <meeting_url> --name "Custom Bot Name"',
+                '',
+                'Supported: Google Meet, Zoom, Microsoft Teams',
+              ].join('\n'),
+            };
+          }
+
+          const payload = { meeting_url: parsed.meetingUrl };
+          if (parsed.botName) payload.bot_name = parsed.botName;
+          const result = await callBridge(api, '/launch', { method: 'POST', body: payload });
+          const launchedName = result?.bot_name ? ` (${result.bot_name})` : '';
+          return { text: `Launch requested${launchedName}.\n${JSON.stringify(result, null, 2)}` };
         }
         if (action === 'mute') {
           const result = await callBridge(api, '/mute', 'POST');
@@ -105,6 +173,7 @@ export default function register(api) {
             '',
             'Actions:',
             '- status',
+            '- launch <meeting_url> [--name "Bot Name"]',
             '- mute',
             '- unmute',
             '- verbose-on',
