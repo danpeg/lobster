@@ -12,7 +12,7 @@ Both branches are public-safe only (no secrets in code).
 ## Install (Plugin)
 
 ```bash
-openclaw plugins install @curious-endeavor/openclaw-recall-copilot-plugin
+openclaw plugins install @curious-endeavor/recall-copilot
 openclaw daemon restart
 openclaw plugins info recall-copilot
 ```

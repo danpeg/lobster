@@ -1,5 +1,5 @@
 {
-  "name": "@curious-endeavor/openclaw-recall-copilot-plugin",
+  "name": "@curious-endeavor/recall-copilot",
   "version": "0.1.0",
   "description": "OpenClaw plugin for controlling a Recall.ai meeting copilot bridge",
   "type": "module",
