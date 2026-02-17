@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1] - 2026-02-17
+
+- Pinned meeting output routing to the chat where `/clawpilot join` was launched
+- Plugin now sends launch origin routing metadata (`channel` + target id) to bridge
+- Bridge now stores per-bot routing target and uses it for copilot reactions and transcript mirror messages
+- Prevents group-launched meetings from drifting into DM replies
+
 ## [0.2.0] - 2026-02-17
 
 - Consolidated plugin command UX to strict `/clawpilot <command>` verbs

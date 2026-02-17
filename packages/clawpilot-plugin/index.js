@@ -156,6 +156,20 @@ function inferAgentName(api, ctx) {
   ]);
 }
 
+function buildRouteTarget(ctx) {
+  const channel = sanitizeAgentName(ctx?.channelId || ctx?.channel).toLowerCase();
+  const to = sanitizeAgentName(ctx?.to || ctx?.from);
+  if (!channel || !to) return null;
+
+  const target = { channel, to };
+  const accountId = sanitizeAgentName(ctx?.accountId);
+  if (accountId) target.accountId = accountId;
+  if (typeof ctx?.messageThreadId === 'number' && Number.isFinite(ctx.messageThreadId)) {
+    target.messageThreadId = ctx.messageThreadId;
+  }
+  return target;
+}
+
 async function callBridge(api, path, options = 'GET') {
   let method = 'GET';
   let body;
@@ -224,6 +238,8 @@ export default function register(api) {
           }
 
           const payload = { meeting_url: parsed.meetingUrl };
+          const routeTarget = buildRouteTarget(ctx);
+          if (routeTarget) payload.route_target = routeTarget;
           if (parsed.botName) payload.bot_name = parsed.botName;
           if (!parsed.botName) {
             const agentName = inferAgentName(api, ctx);
