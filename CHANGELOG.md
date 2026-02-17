@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.2] - 2026-02-17
+
+- Changed `/clawpilot join` response to a concise summary instead of full raw Recall JSON payload
+- Prevents leaking verbose launch internals (including webhook query tokens) into chat transcripts
+
 ## [0.2.1] - 2026-02-17
 
 - Pinned meeting output routing to the chat where `/clawpilot join` was launched

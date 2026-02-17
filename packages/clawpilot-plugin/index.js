@@ -128,6 +128,30 @@ function buildHelpText() {
   ].join('\n');
 }
 
+function formatJoinSummary(result) {
+  const lines = [];
+  const botName = sanitizeAgentName(result?.bot_name);
+  const joinLine = botName ? `Join requested (${botName}).` : 'Join requested.';
+  lines.push(joinLine);
+
+  if (typeof result?.id === 'string' && result.id.trim()) {
+    lines.push(`Bot ID: \`${result.id.trim()}\``);
+  }
+
+  const platform = sanitizeAgentName(result?.meeting_url?.platform).replace(/_/g, ' ');
+  const meetingId = sanitizeAgentName(result?.meeting_url?.meeting_id);
+  if (platform || meetingId) {
+    lines.push(`Meeting: ${[platform, meetingId].filter(Boolean).join(' ')}`);
+  }
+
+  if (typeof result?.join_at === 'string' && result.join_at.trim()) {
+    lines.push(`Join time: ${result.join_at.trim()}`);
+  }
+
+  lines.push('Admit the bot in the meeting when prompted.');
+  return lines.join('\n');
+}
+
 function inferAgentName(api, ctx) {
   const cfg = api.runtime.config.loadConfig() || {};
   const pluginCfg = cfg?.plugins?.entries?.[PLUGIN_ID]?.config || {};
@@ -246,8 +270,7 @@ export default function register(api) {
             if (agentName) payload.agent_name = agentName;
           }
           const result = await callBridge(api, '/launch', { method: 'POST', body: payload });
-          const launchedName = result?.bot_name ? ` (${result.bot_name})` : '';
-          return { text: `Join requested${launchedName}.\n${JSON.stringify(result, null, 2)}` };
+          return { text: formatJoinSummary(result) };
         }
 
         if (action === 'pause') {
