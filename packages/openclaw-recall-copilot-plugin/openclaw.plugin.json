@@ -1,0 +1,29 @@
+{
+  "id": "recall-copilot",
+  "name": "Recall Copilot",
+  "description": "Control and inspect the Recall transcript copilot bridge.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "bridgeBaseUrl": {
+        "type": "string",
+        "description": "Base URL for the copilot bridge service"
+      },
+      "bridgeToken": {
+        "type": "string",
+        "description": "Optional bearer token for bridge control endpoints"
+      }
+    }
+  },
+  "uiHints": {
+    "bridgeBaseUrl": {
+      "label": "Bridge URL",
+      "help": "Example: http://127.0.0.1:3001"
+    },
+    "bridgeToken": {
+      "label": "Bridge Token",
+      "help": "Optional bearer token if your bridge requires auth"
+    }
+  }
+}

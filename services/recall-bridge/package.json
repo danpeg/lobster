@@ -1,0 +1,15 @@
+{
+  "name": "recall-webhook",
+  "version": "1.0.0",
+  "description": "Recall.ai webhook receiver for real-time meeting feedback",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test:live": "node live-test.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "googleapis": "^171.4.0",
+    "ws": "^8.19.0"
+  }
+}
