@@ -41,7 +41,7 @@ npm start
 
 - Reactions are final-transcript driven by default (`REACT_ON_PARTIAL=false`)
 - Output is a single natural coaching line (no forced numbered format)
-- Default proactivity is `normal` to reduce chat spam
+- Default proactivity is `high` for faster, more frequent suggestions
 
 ## Verbose Mode Behavior
 

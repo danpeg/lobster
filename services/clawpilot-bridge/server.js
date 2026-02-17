@@ -233,13 +233,13 @@ let reactionInFlight = false;
 let queuedReaction = null;
 let queuedReactionTimer = null;
 let reactionSeq = 0;
-const PROACTIVITY_LEVEL = String(process.env.PROACTIVITY_LEVEL || 'normal').toLowerCase();
+const PROACTIVITY_LEVEL = String(process.env.PROACTIVITY_LEVEL || 'high').toLowerCase();
 const PROACTIVITY_PRESETS = {
   low: { reactionCooldownMs: 4200, partialDebounceMs: 5200, minNewWords: 20, partialMinNewWords: 18, partialContextWindow: 8, finalContextWindow: 10 },
   normal: { reactionCooldownMs: 2400, partialDebounceMs: 3200, minNewWords: 14, partialMinNewWords: 12, partialContextWindow: 10, finalContextWindow: 12 },
   high: { reactionCooldownMs: 1100, partialDebounceMs: 1800, minNewWords: 8, partialMinNewWords: 6, partialContextWindow: 12, finalContextWindow: 14 }
 };
-const selectedProactivity = PROACTIVITY_PRESETS[PROACTIVITY_LEVEL] || PROACTIVITY_PRESETS.normal;
+const selectedProactivity = PROACTIVITY_PRESETS[PROACTIVITY_LEVEL] || PROACTIVITY_PRESETS.high;
 const REACT_ON_PARTIAL = parseBooleanLike(process.env.REACT_ON_PARTIAL, false);
 const REACTION_COOLDOWN_MS = parseIntegerLike(process.env.REACTION_COOLDOWN_MS, selectedProactivity.reactionCooldownMs); // Finals
 const PARTIAL_REACTION_DEBOUNCE_MS = parseIntegerLike(process.env.PARTIAL_REACTION_DEBOUNCE_MS, selectedProactivity.partialDebounceMs); // Partials
