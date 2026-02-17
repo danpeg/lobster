@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.6] - 2026-02-17
+
+- Changed verbose transcript mirroring to use OpenClaw `/hooks/agent` with `channel=last`
+- Improves cross-channel behavior so transcript echoes stay in the active chat app (e.g., WhatsApp)
+
 ## [0.1.5] - 2026-02-17
 
 - Added `RECALL_API_BASE` env support for region-specific Recall workspaces

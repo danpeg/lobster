@@ -46,7 +46,7 @@ npm start
 ## Verbose Mode Behavior
 
 - `meetverbose` mirrors raw final transcript lines through OpenClaw hook injection
-- This keeps transcript mirrors in the same active chat program/channel as copilot reactions
+- Mirrors are routed via `/hooks/agent` with `channel=last` so they stay in the currently active chat program/channel
 - Optional Telegram mirror can be enabled with `DEBUG_MIRROR_TELEGRAM=true`
 
 ## Health Check
