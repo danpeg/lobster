@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.1] - 2026-02-17
+
+- Removed plugin environment variable fallback reads for bridge URL/token
+- Added bridge host allowlist (localhost, private IPs, and `*.ts.net` by default)
+- Added explicit `allowRemoteBridge` opt-in for non-private endpoints
+
 ## [0.1.0] - 2026-02-17
 
 - Initial public scaffolding for ClawPilot

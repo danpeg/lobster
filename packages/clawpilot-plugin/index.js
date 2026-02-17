@@ -1,10 +1,53 @@
 const PLUGIN_ID = 'clawpilot';
+const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:3001';
+
+function isPrivateIpv4(hostname) {
+  if (!/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) return false;
+  const parts = hostname.split('.').map(Number);
+  if (parts.length !== 4 || parts.some((n) => Number.isNaN(n) || n < 0 || n > 255)) return false;
+
+  const [a, b] = parts;
+  if (a === 10 || a === 127) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT range used by Tailscale.
+  return false;
+}
+
+function isAllowedBridgeHost(hostname) {
+  if (!hostname) return false;
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') return true;
+  if (hostname.endsWith('.ts.net')) return true;
+  return isPrivateIpv4(hostname);
+}
+
+function normalizeBridgeBaseUrl(rawUrl, allowRemoteBridge) {
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error(`Invalid bridgeBaseUrl: ${rawUrl}`);
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`Unsupported bridgeBaseUrl protocol: ${parsed.protocol}`);
+  }
+
+  if (!allowRemoteBridge && !isAllowedBridgeHost(parsed.hostname)) {
+    throw new Error(
+      `Blocked non-private bridge host "${parsed.hostname}". Set allowRemoteBridge=true only if you trust that endpoint.`
+    );
+  }
+
+  return `${parsed.protocol}//${parsed.host}${parsed.pathname}`.replace(/\/$/, '');
+}
 
 function loadBridgeConfig(api) {
   const cfg = api.runtime.config.loadConfig();
   const pluginCfg = cfg?.plugins?.entries?.[PLUGIN_ID]?.config || {};
-  const bridgeBaseUrl = (pluginCfg.bridgeBaseUrl || process.env.COPILOT_BRIDGE_URL || 'http://127.0.0.1:3001').replace(/\/$/, '');
-  const bridgeToken = pluginCfg.bridgeToken || process.env.COPILOT_BRIDGE_TOKEN || '';
+  const allowRemoteBridge = Boolean(pluginCfg.allowRemoteBridge);
+  const bridgeBaseUrl = normalizeBridgeBaseUrl(pluginCfg.bridgeBaseUrl || DEFAULT_BRIDGE_URL, allowRemoteBridge);
+  const bridgeToken = pluginCfg.bridgeToken || '';
   return { bridgeBaseUrl, bridgeToken };
 }
 
