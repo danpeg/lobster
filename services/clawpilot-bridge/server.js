@@ -6,6 +6,9 @@
 
 const express = require('express');
 const crypto = require('crypto');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3001;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -61,6 +64,33 @@ function resolveBotName(options = {}) {
 // Recall API key for verification
 const RECALL_API_KEY = process.env.RECALL_API_KEY;
 
+function readOpenClawHookDefaults() {
+  const configPath = process.env.OPENCLAW_CONFIG_PATH || path.join(os.homedir(), '.openclaw', 'openclaw.json');
+  try {
+    const raw = fs.readFileSync(configPath, 'utf8');
+    const cfg = JSON.parse(raw);
+    const portRaw = Number(cfg?.gateway?.port);
+    const gatewayPort = Number.isFinite(portRaw) && portRaw > 0 ? portRaw : 18789;
+    const hooksPathRaw = typeof cfg?.hooks?.path === 'string' ? cfg.hooks.path.trim() : '';
+    const hooksPathWithSlash = hooksPathRaw ? (hooksPathRaw.startsWith('/') ? hooksPathRaw : `/${hooksPathRaw}`) : '/hooks';
+    const hooksPath = (hooksPathWithSlash.length > 1 ? hooksPathWithSlash.replace(/\/+$/, '') : hooksPathWithSlash) || '/hooks';
+    const hookToken = typeof cfg?.hooks?.token === 'string' ? cfg.hooks.token.trim() : '';
+    return {
+      hookUrl: `http://127.0.0.1:${gatewayPort}${hooksPath}/wake`,
+      hookToken,
+      configPath
+    };
+  } catch {
+    return {
+      hookUrl: '',
+      hookToken: '',
+      configPath
+    };
+  }
+}
+
+const OPENCLAW_HOOK_DEFAULTS = readOpenClawHookDefaults();
+
 // Webhook secret for verifying incoming requests
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 const WEBHOOK_BASE_URL = process.env.WEBHOOK_BASE_URL || `http://127.0.0.1:${PORT}`;
@@ -68,8 +98,10 @@ const RECALL_API_BASE = String(process.env.RECALL_API_BASE || 'https://eu-centra
 const RECALL_BOTS_ENDPOINT = `${RECALL_API_BASE}/api/v1/bot`;
 const DEFAULT_RECALL_LANGUAGE = process.env.RECALL_LANGUAGE_CODE || 'en';
 const DEFAULT_RECALL_STT_MODE = process.env.RECALL_STT_MODE || 'prioritize_low_latency';
-const OPENCLAW_HOOK_URL = process.env.OPENCLAW_HOOK_URL || 'http://127.0.0.1:18789/hooks/wake';
-const OPENCLAW_HOOK_TOKEN = process.env.OPENCLAW_HOOK_TOKEN || '';
+const OPENCLAW_HOOK_URL = process.env.OPENCLAW_HOOK_URL || OPENCLAW_HOOK_DEFAULTS.hookUrl || 'http://127.0.0.1:18789/hooks/wake';
+const OPENCLAW_HOOK_TOKEN = process.env.OPENCLAW_HOOK_TOKEN || OPENCLAW_HOOK_DEFAULTS.hookToken || '';
+const OPENCLAW_HOOK_URL_SOURCE = process.env.OPENCLAW_HOOK_URL ? 'env' : (OPENCLAW_HOOK_DEFAULTS.hookUrl ? 'openclaw.json' : 'builtin-default');
+const OPENCLAW_HOOK_TOKEN_SOURCE = process.env.OPENCLAW_HOOK_TOKEN ? 'env' : (OPENCLAW_HOOK_DEFAULTS.hookToken ? 'openclaw.json' : 'missing');
 const REPLACE_ACTIVE_ON_DUPLICATE = process.env.REPLACE_ACTIVE_ON_DUPLICATE !== 'false';
 const BOT_REPLACE_WAIT_TIMEOUT_MS = Number(process.env.BOT_REPLACE_WAIT_TIMEOUT_MS || 45000);
 const BOT_REPLACE_POLL_MS = Number(process.env.BOT_REPLACE_POLL_MS || 1500);
@@ -105,11 +137,11 @@ function deriveAgentHookUrl(wakeUrl) {
 
 const OPENCLAW_AGENT_HOOK_URL = deriveAgentHookUrl(OPENCLAW_HOOK_URL);
 
-async function sendDebugTranscript(speaker, text, isPartial) {
+async function sendDebugTranscript(speaker, text, isPartial, options = {}) {
   if (!DEBUG_MODE) return;
 
   const prefix = isPartial ? '[RAW PARTIAL]' : '[RAW FINAL]';
-  await sendVerboseMirrorToOpenClaw(`${prefix} ${speaker}: ${text}`);
+  await sendVerboseMirrorToOpenClaw(`${prefix} ${speaker}: ${text}`, options);
 
   if (!DEBUG_MIRROR_TELEGRAM || !TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
   try {
@@ -128,21 +160,23 @@ async function sendDebugTranscript(speaker, text, isPartial) {
   } catch (e) {}
 }
 
-async function sendVerboseMirrorToOpenClaw(line) {
+async function sendVerboseMirrorToOpenClaw(line, options = {}) {
   const sendStart = Date.now();
   try {
     if (!OPENCLAW_HOOK_TOKEN) {
       console.error('[VerboseMirror] OPENCLAW_HOOK_TOKEN is required.');
       return null;
     }
+    const routeTarget = resolveRouteTarget(options.routeTarget, options.botId);
 
     const payload = {
       message: `[MEETVERBOSE MIRROR]\nReply with exactly this line and nothing else:\n${line}`,
       name: 'ClawPilot Verbose',
-      channel: 'last',
       wakeMode: 'now',
       deliver: true
     };
+    if (routeTarget?.channel) payload.channel = routeTarget.channel;
+    if (routeTarget?.to) payload.to = routeTarget.to;
 
     const response = await fetch(OPENCLAW_AGENT_HOOK_URL, {
       method: "POST",
@@ -161,7 +195,8 @@ async function sendVerboseMirrorToOpenClaw(line) {
       result = { ok: response.ok, raw };
     }
     const elapsed = Date.now() - sendStart;
-    console.log(`[VerboseMirror] ${elapsed}ms - ${response.ok ? "accepted" : "failed"}`);
+    const routeText = routeTarget ? `${routeTarget.channel}:${routeTarget.to}` : 'last';
+    console.log(`[VerboseMirror] ${elapsed}ms - ${response.ok ? "accepted" : "failed"} route=${routeText}`);
     return result;
   } catch (error) {
     console.error("[VerboseMirror] Error:", error.message);
@@ -215,9 +250,47 @@ const FINAL_CONTEXT_WINDOW = parseIntegerLike(process.env.FINAL_CONTEXT_WINDOW, 
 const meetingStartByBot = new Map(); // bot_id -> epoch ms when recording started
 const relativeEpochBaseByBot = new Map(); // bot_id -> epoch ms at relative timestamp zero (fallback estimator)
 const meetingSessionByBotId = new Map(); // bot_id -> canvas session id
+const routeTargetByBotId = new Map(); // bot_id -> { channel, to }
 const lastCanvasLineBySession = new Map(); // session id -> last line to dedupe
 const botSessionLookupInFlight = new Map(); // bot_id -> Promise<string|null>
 let activeMeetingSessionId = 'default';
+let activeRouteTarget = null;
+
+function normalizeRouteChannel(value) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return null;
+  if (!/^[a-z0-9_.:-]+$/.test(normalized)) return null;
+  return normalized;
+}
+
+function normalizeRouteTarget(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const channel = normalizeRouteChannel(raw.channel || raw.channelId);
+  const candidates = [raw.to, raw.conversationId, raw.chatId, raw.from];
+  const to = candidates
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .find((value) => Boolean(value));
+  if (!channel || !to) return null;
+  return { channel, to };
+}
+
+function rememberBotRouteTarget(botId, routeTarget) {
+  if (!botId) return;
+  const normalized = normalizeRouteTarget(routeTarget);
+  if (!normalized) return;
+  routeTargetByBotId.set(botId, normalized);
+  activeRouteTarget = normalized;
+}
+
+function resolveRouteTarget(routeTarget, botId = null) {
+  const explicit = normalizeRouteTarget(routeTarget);
+  if (explicit) return explicit;
+  if (botId && routeTargetByBotId.has(botId)) {
+    return routeTargetByBotId.get(botId);
+  }
+  return activeRouteTarget;
+}
 
 function normalizeControlText(value) {
   return String(value || '')
@@ -292,7 +365,14 @@ app.get('/health', (req, res) => {
     uptime: process.uptime(),
     muted: IS_MUTED,
     meetverbose: DEBUG_MODE,
-    proactivity: PROACTIVITY_LEVEL
+    proactivity: PROACTIVITY_LEVEL,
+    hook: {
+      url: OPENCLAW_HOOK_URL,
+      agent_url: OPENCLAW_AGENT_HOOK_URL,
+      token_set: Boolean(OPENCLAW_HOOK_TOKEN),
+      url_source: OPENCLAW_HOOK_URL_SOURCE,
+      token_source: OPENCLAW_HOOK_TOKEN_SOURCE
+    }
   });
 });
 
@@ -326,6 +406,13 @@ app.get('/copilot/status', (req, res) => {
       partial_min_new_words: PARTIAL_MIN_NEW_WORDS,
       final_context_window: FINAL_CONTEXT_WINDOW,
       partial_context_window: PARTIAL_CONTEXT_WINDOW
+    },
+    hook: {
+      url: OPENCLAW_HOOK_URL,
+      agent_url: OPENCLAW_AGENT_HOOK_URL,
+      token_set: Boolean(OPENCLAW_HOOK_TOKEN),
+      url_source: OPENCLAW_HOOK_URL_SOURCE,
+      token_source: OPENCLAW_HOOK_TOKEN_SOURCE
     }
   });
 });
@@ -412,6 +499,12 @@ function forgetBotSession(botId) {
     return;
   }
   const removed = meetingSessionByBotId.delete(botId);
+  routeTargetByBotId.delete(botId);
+  if (routeTargetByBotId.size === 0) {
+    activeRouteTarget = null;
+  } else {
+    activeRouteTarget = Array.from(routeTargetByBotId.values()).at(-1) || null;
+  }
   if (!removed) {
     return;
   }
@@ -599,17 +692,20 @@ async function waitForBotTerminal(botId, timeoutMs = BOT_REPLACE_WAIT_TIMEOUT_MS
 
 // Proxy endpoint to launch bots (avoids CORS)
 app.post('/launch', async (req, res) => {
-  const { meeting_url, language, provider, replace_active, bot_name, agent_name } = req.body;
+  const { meeting_url, language, provider, replace_active, bot_name, agent_name, route_target } = req.body;
   
   if (!meeting_url) {
     return res.status(400).json({ error: 'meeting_url required' });
   }
+  const requestedRouteTarget = normalizeRouteTarget(route_target);
   const launchSessionId = extractSessionFromMeetingValue(meeting_url) || activeMeetingSessionId;
 
   const shouldReplaceActive = typeof replace_active === 'boolean'
     ? replace_active
     : REPLACE_ACTIVE_ON_DUPLICATE;
   const existingBot = await findActiveBotForMeeting(meeting_url);
+  const existingRouteTarget = existingBot?.id ? routeTargetByBotId.get(existingBot.id) || null : null;
+  const effectiveRouteTarget = requestedRouteTarget || existingRouteTarget;
   let replacedFromBotId = null;
   if (existingBot) {
     if (!shouldReplaceActive) {
@@ -617,7 +713,8 @@ app.post('/launch', async (req, res) => {
         id: existingBot.id,
         status: 'already_active',
         meeting_url,
-        existing_bot: existingBot
+        existing_bot: existingBot,
+        routing_target: effectiveRouteTarget || null
       });
     }
     const removal = await removeBotFromCall(existingBot.id);
@@ -704,7 +801,11 @@ app.post('/launch', async (req, res) => {
       }
       if (response.status >= 200 && response.status < 300 && json?.id) {
         rememberBotSession(json.id, launchSessionId);
+        if (effectiveRouteTarget) {
+          rememberBotRouteTarget(json.id, effectiveRouteTarget);
+        }
         json.meeting_session = normalizeMeetingSessionId(launchSessionId);
+        json.routing_target = effectiveRouteTarget || null;
       }
       return res.status(response.status).json(json);
     } catch (e) {
@@ -953,7 +1054,7 @@ async function handleRecallTranscript(data, isPartial, event) {
           default:
             break;
         }
-        await sendToOpenClaw(`[MEETING CONTROL] ${controlCommand.ack}`);
+        await sendToOpenClaw(`[MEETING CONTROL] ${controlCommand.ack}`, { botId });
         return;
       }
     }
@@ -1004,7 +1105,7 @@ async function handleRecallTranscript(data, isPartial, event) {
     
     // Debug mode: send raw transcript (only final, not partial - too spammy)
     if (!isPartial && !IS_MUTED) {
-      sendDebugTranscript(speaker, text, isPartial);
+      sendDebugTranscript(speaker, text, isPartial, { botId });
       appendTranscriptToCanvas(eventSessionId, speaker, text, botId);
     }
     
@@ -1090,7 +1191,8 @@ async function runReaction(candidate, source) {
 
   try {
     const injectMs = await sendToOpenClaw(
-      `[MEETING TRANSCRIPT - Active copilot for meeting host]\n\n${candidate.context}\n\n---\nYou are a live meeting copilot coaching the host.\nReturn plain text only (no numbering, bullets, labels, or quotes).\nWrite one short interruption-worthy suggestion the host can say next.\nOptional: add one short follow-up question in the same message.\nKeep total under 32 words, concrete, and conversational.`
+      `[MEETING TRANSCRIPT - Active copilot for meeting host]\n\n${candidate.context}\n\n---\nYou are a live meeting copilot coaching the host.\nReturn plain text only (no numbering, bullets, labels, or quotes).\nWrite one short interruption-worthy suggestion the host can say next.\nOptional: add one short follow-up question in the same message.\nKeep total under 32 words, concrete, and conversational.`,
+      { botId: candidate.meta.botId }
     );
     const webhookToInjectMs = candidate.meta.webhookReceivedAtMs
       ? Math.max(0, Date.now() - candidate.meta.webhookReceivedAtMs)
@@ -1141,22 +1243,40 @@ async function reactImmediate(message) {
   await sendToOpenClaw(message);
 }
 
-async function sendToOpenClaw(message) {
+async function sendToOpenClaw(message, options = {}) {
   const sendStart = Date.now();
   try {
     if (!OPENCLAW_HOOK_TOKEN) {
       console.error('[FastInject] OPENCLAW_HOOK_TOKEN is required.');
       return null;
     }
+    const routeTarget = resolveRouteTarget(options.routeTarget, options.botId);
     const text = `[MEETING TRANSCRIPT]\n${message}`;
-    const response = await fetch(OPENCLAW_HOOK_URL, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${OPENCLAW_HOOK_TOKEN}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ text, mode: "now" })
-    });
+    const headers = {
+      "Authorization": `Bearer ${OPENCLAW_HOOK_TOKEN}`,
+      "Content-Type": "application/json"
+    };
+    let response;
+    if (routeTarget?.channel && routeTarget?.to) {
+      response = await fetch(OPENCLAW_AGENT_HOOK_URL, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          message: text,
+          name: 'ClawPilot Copilot',
+          wakeMode: 'now',
+          deliver: true,
+          channel: routeTarget.channel,
+          to: routeTarget.to
+        })
+      });
+    } else {
+      response = await fetch(OPENCLAW_HOOK_URL, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ text, mode: "now" })
+      });
+    }
     const raw = await response.text();
     let result;
     try {
@@ -1165,7 +1285,8 @@ async function sendToOpenClaw(message) {
       result = { ok: response.ok, raw };
     }
     const elapsed = Date.now() - sendStart;
-    console.log(`[FastInject] ${elapsed}ms - ${result.ok ? "success" : "failed"}`);
+    const routeText = routeTarget ? `${routeTarget.channel}:${routeTarget.to}` : 'wake';
+    console.log(`[FastInject] ${elapsed}ms - ${response.ok ? "success" : "failed"} route=${routeText}`);
     return elapsed;
   } catch (error) {
     console.error("[FastInject] Error:", error.message);
@@ -1343,4 +1464,9 @@ app.listen(PORT, HOST, () => {
   console.log(`Recall webhook server running on port ${PORT}`);
   console.log(`Webhook URL: ${WEBHOOK_BASE_URL.replace(/\/$/, '')}/webhook`);
   console.log(`Health check: http://localhost:${PORT}/health`);
+  console.log(`[OpenClawHook] wake=${OPENCLAW_HOOK_URL} agent=${OPENCLAW_AGENT_HOOK_URL}`);
+  console.log(`[OpenClawHook] token=${OPENCLAW_HOOK_TOKEN ? 'set' : 'missing'} url_source=${OPENCLAW_HOOK_URL_SOURCE} token_source=${OPENCLAW_HOOK_TOKEN_SOURCE}`);
+  if (!OPENCLAW_HOOK_TOKEN) {
+    console.warn(`[OpenClawHook] token missing. Set OPENCLAW_HOOK_TOKEN or configure hooks.token in ${OPENCLAW_HOOK_DEFAULTS.configPath}`);
+  }
 });
