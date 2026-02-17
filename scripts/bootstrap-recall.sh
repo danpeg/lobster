@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENV_FILE="$ROOT_DIR/services/recall-bridge/.env"
-EXAMPLE_FILE="$ROOT_DIR/services/recall-bridge/.env.example"
+ENV_FILE="$ROOT_DIR/services/clawpilot-bridge/.env"
+EXAMPLE_FILE="$ROOT_DIR/services/clawpilot-bridge/.env.example"
 
 if [[ ! -f "$EXAMPLE_FILE" ]]; then
   echo "Missing $EXAMPLE_FILE"
@@ -46,7 +46,7 @@ cat <<MSG
 Wrote: $ENV_FILE
 
 Next:
-1) cd $ROOT_DIR/services/recall-bridge
+1) cd $ROOT_DIR/services/clawpilot-bridge
 2) set -a; source ./.env; set +a
 3) npm install
 4) npm start

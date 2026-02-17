@@ -17,7 +17,7 @@ npm run check:plugin-pack
 ## 3. Publish npm package
 
 ```bash
-cd packages/openclaw-recall-copilot-plugin
+cd packages/clawpilot-plugin
 npm version patch
 npm publish --access public
 ```

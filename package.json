@@ -1,9 +1,9 @@
 {
-  "name": "openclaw-meeting-copilot-monorepo",
+  "name": "clawpilot-monorepo",
   "private": true,
   "version": "0.1.0",
   "scripts": {
     "security:scan": "bash ./scripts/scan-secrets.sh",
-    "check:plugin-pack": "cd packages/openclaw-recall-copilot-plugin && npm pack --dry-run"
+    "check:plugin-pack": "cd packages/clawpilot-plugin && npm pack --dry-run"
   }
 }
