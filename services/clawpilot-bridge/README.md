@@ -36,6 +36,12 @@ npm start
 - `RECALL_BOT_NAME` -> explicit override
 - `RECALL_BOT_NAME_SUFFIX` -> defaults to `Note Taker`
 
+## Reaction Style Defaults
+
+- Reactions are final-transcript driven by default (`REACT_ON_PARTIAL=false`)
+- Output is a single natural coaching line (no forced numbered format)
+- Default proactivity is `normal` to reduce chat spam
+
 ## Health Check
 
 ```bash

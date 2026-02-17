@@ -44,6 +44,12 @@ function resolveBotName(options = {}) {
   const explicit = sanitizeBotName(process.env.RECALL_BOT_NAME || '');
   if (explicit) return explicit;
 
+  const providedAgentName = sanitizeBotName(options.agentName || '');
+  if (providedAgentName) {
+    const suffix = sanitizeBotName(process.env.RECALL_BOT_NAME_SUFFIX || 'Note Taker', 'Note Taker');
+    return sanitizeBotName(`${providedAgentName} ${suffix}`, `${providedAgentName} Note Taker`);
+  }
+
   const agentName = sanitizeBotName(
     process.env.OPENCLAW_AGENT_NAME || process.env.CLAW_AGENT_NAME || process.env.AGENT_NAME || ''
   );
@@ -129,13 +135,14 @@ let reactionInFlight = false;
 let queuedReaction = null;
 let queuedReactionTimer = null;
 let reactionSeq = 0;
-const PROACTIVITY_LEVEL = String(process.env.PROACTIVITY_LEVEL || 'high').toLowerCase();
+const PROACTIVITY_LEVEL = String(process.env.PROACTIVITY_LEVEL || 'normal').toLowerCase();
 const PROACTIVITY_PRESETS = {
-  low: { reactionCooldownMs: 3000, partialDebounceMs: 4200, minNewWords: 16, partialMinNewWords: 14, partialContextWindow: 8, finalContextWindow: 10 },
-  normal: { reactionCooldownMs: 1400, partialDebounceMs: 2600, minNewWords: 10, partialMinNewWords: 8, partialContextWindow: 10, finalContextWindow: 12 },
-  high: { reactionCooldownMs: 800, partialDebounceMs: 1400, minNewWords: 7, partialMinNewWords: 5, partialContextWindow: 12, finalContextWindow: 14 }
+  low: { reactionCooldownMs: 4200, partialDebounceMs: 5200, minNewWords: 20, partialMinNewWords: 18, partialContextWindow: 8, finalContextWindow: 10 },
+  normal: { reactionCooldownMs: 2400, partialDebounceMs: 3200, minNewWords: 14, partialMinNewWords: 12, partialContextWindow: 10, finalContextWindow: 12 },
+  high: { reactionCooldownMs: 1100, partialDebounceMs: 1800, minNewWords: 8, partialMinNewWords: 6, partialContextWindow: 12, finalContextWindow: 14 }
 };
 const selectedProactivity = PROACTIVITY_PRESETS[PROACTIVITY_LEVEL] || PROACTIVITY_PRESETS.normal;
+const REACT_ON_PARTIAL = parseBooleanLike(process.env.REACT_ON_PARTIAL, false);
 const REACTION_COOLDOWN_MS = parseIntegerLike(process.env.REACTION_COOLDOWN_MS, selectedProactivity.reactionCooldownMs); // Finals
 const PARTIAL_REACTION_DEBOUNCE_MS = parseIntegerLike(process.env.PARTIAL_REACTION_DEBOUNCE_MS, selectedProactivity.partialDebounceMs); // Partials
 const MIN_NEW_WORDS = parseIntegerLike(process.env.MIN_NEW_WORDS, selectedProactivity.minNewWords); // Finals
@@ -529,7 +536,7 @@ async function waitForBotTerminal(botId, timeoutMs = BOT_REPLACE_WAIT_TIMEOUT_MS
 
 // Proxy endpoint to launch bots (avoids CORS)
 app.post('/launch', async (req, res) => {
-  const { meeting_url, language, provider, replace_active, bot_name } = req.body;
+  const { meeting_url, language, provider, replace_active, bot_name, agent_name } = req.body;
   
   if (!meeting_url) {
     return res.status(400).json({ error: 'meeting_url required' });
@@ -575,7 +582,7 @@ app.post('/launch', async (req, res) => {
   const requestedLang = language || DEFAULT_RECALL_LANGUAGE;
   const lang = requestedLang === 'multi' ? 'auto' : requestedLang;
   const prov = provider || 'recallai_streaming';
-  const resolvedBotName = resolveBotName({ requested: bot_name });
+  const resolvedBotName = resolveBotName({ requested: bot_name, agentName: agent_name });
 
   // Build provider config (must use exact provider names from Recall API)
   let transcriptConfig;
@@ -959,7 +966,9 @@ async function handleRecallTranscript(data, isPartial, event) {
     }
     
     const force = !isPartial && hasHighValueCue(text);
-    await maybeReact({ webhookReceivedAtMs: nowMs, speechToWebhookMs: speechEndToWebhookMs, botId, isPartial, force });
+    if (!isPartial || REACT_ON_PARTIAL) {
+      await maybeReact({ webhookReceivedAtMs: nowMs, speechToWebhookMs: speechEndToWebhookMs, botId, isPartial, force });
+    }
   }
 }
 
@@ -1038,7 +1047,7 @@ async function runReaction(candidate, source) {
 
   try {
     const injectMs = await sendToOpenClaw(
-      `[MEETING TRANSCRIPT - Active copilot for meeting host]\n\n${candidate.context}\n\n---\nRespond as a proactive meeting copilot.\nOutput exactly:\n1) Next line the meeting host should say (one sentence, verbatim)\n2) Why now (max 12 words)\n3) Optional: one tactical question the host should ask next\nKeep total under 60 words, specific, decisive, and interruption-worthy.`
+      `[MEETING TRANSCRIPT - Active copilot for meeting host]\n\n${candidate.context}\n\n---\nYou are a live meeting copilot coaching the host.\nReturn plain text only (no numbering, bullets, labels, or quotes).\nWrite one short interruption-worthy suggestion the host can say next.\nOptional: add one short follow-up question in the same message.\nKeep total under 32 words, concrete, and conversational.`
     );
     const webhookToInjectMs = candidate.meta.webhookReceivedAtMs
       ? Math.max(0, Date.now() - candidate.meta.webhookReceivedAtMs)

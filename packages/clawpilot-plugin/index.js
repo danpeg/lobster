@@ -1,6 +1,22 @@
 const PLUGIN_ID = 'clawpilot';
 const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:3001';
 
+function sanitizeAgentName(value) {
+  const normalized = String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return '';
+  return normalized.slice(0, 80);
+}
+
+function pickFirstNonEmptyString(candidates) {
+  for (const value of candidates) {
+    const candidate = sanitizeAgentName(value);
+    if (candidate) return candidate;
+  }
+  return '';
+}
+
 function isPrivateIpv4(hostname) {
   if (!/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) return false;
   const parts = hostname.split('.').map(Number);
@@ -82,6 +98,34 @@ function parseLaunchArgs(raw) {
   };
 }
 
+function inferAgentName(api, ctx) {
+  const cfg = api.runtime.config.loadConfig() || {};
+  const pluginCfg = cfg?.plugins?.entries?.[PLUGIN_ID]?.config || {};
+
+  const fromPluginConfig = sanitizeAgentName(pluginCfg.agentName);
+  if (fromPluginConfig) return fromPluginConfig;
+
+  const fromContext = pickFirstNonEmptyString([
+    ctx?.agentName,
+    ctx?.agent?.name,
+    ctx?.profile?.name,
+    ctx?.identity?.name,
+    ctx?.assistant?.name,
+    ctx?.user?.name,
+  ]);
+  if (fromContext) return fromContext;
+
+  return pickFirstNonEmptyString([
+    cfg?.agent?.name,
+    cfg?.assistant?.name,
+    cfg?.persona?.name,
+    cfg?.agents?.main?.name,
+    cfg?.agents?.defaults?.name,
+    cfg?.channels?.telegram?.displayName,
+    cfg?.channels?.telegram?.name,
+  ]);
+}
+
 async function callBridge(api, path, options = 'GET') {
   let method = 'GET';
   let body;
@@ -146,6 +190,10 @@ export default function register(api) {
 
           const payload = { meeting_url: parsed.meetingUrl };
           if (parsed.botName) payload.bot_name = parsed.botName;
+          if (!parsed.botName) {
+            const agentName = inferAgentName(api, ctx);
+            if (agentName) payload.agent_name = agentName;
+          }
           const result = await callBridge(api, '/launch', { method: 'POST', body: payload });
           const launchedName = result?.bot_name ? ` (${result.bot_name})` : '';
           return { text: `Launch requested${launchedName}.\n${JSON.stringify(result, null, 2)}` };
