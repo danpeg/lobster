@@ -920,7 +920,6 @@ async function handleRecallTranscript(data, isPartial, event) {
       }
     }
     console.log(`[${isPartial ? 'Partial' : 'Final'}] ${speaker}: ${text}`);
-    // bufferForNotion(speaker, text); // Disabled - using structured notes instead
     const firstWord = words[0] || null;
     const lastWord = words[words.length - 1] || firstWord;
     const speechStartMs = extractWordStartMs(firstWord, botId, nowMs);
@@ -1133,82 +1132,6 @@ app.post('/meetverbose', (req, res) => {
 
   res.json({ meetverbose: DEBUG_MODE, muted: IS_MUTED, message: DEBUG_MODE ? 'Raw transcripts ON' : 'Raw transcripts OFF' });
 });
-
-// ============ NOTION INTEGRATION ============
-const ENABLE_NOTION = process.env.ENABLE_NOTION === 'true';
-const NOTION_TOKEN = process.env.NOTION_TOKEN || '';
-const NOTION_PAGE_ID = process.env.NOTION_PAGE_ID || '';
-
-let notionBuffer = [];
-let lastNotionWrite = 0;
-const NOTION_WRITE_INTERVAL = 3000; // Write to Notion every 3 seconds
-
-async function writeToNotion(text) {
-  try {
-    if (!ENABLE_NOTION || !NOTION_TOKEN || !NOTION_PAGE_ID) return;
-    const safe = String(text || '').substring(0, 2000);
-    const response = await fetch(`https://api.notion.com/v1/blocks/${NOTION_PAGE_ID}/children`, {
-      method: 'PATCH',
-      headers: {
-        Authorization: `Bearer ${NOTION_TOKEN}`,
-        'Notion-Version': '2022-06-28',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        children: [
-          {
-            object: 'block',
-            type: 'paragraph',
-            paragraph: {
-              rich_text: [{ type: 'text', text: { content: safe } }]
-            }
-          }
-        ]
-      })
-    });
-    if (!response.ok) {
-      const errBody = await response.text();
-      throw new Error(`Notion API error ${response.status}: ${errBody.substring(0, 300)}`);
-    }
-    console.log('[Notion] Wrote buffered transcript chunk');
-  } catch (e) {
-    console.error('[Notion] Error:', e.message);
-  }
-}
-
-// Flush transcript buffer to Notion periodically
-setInterval(async () => {
-  if (ENABLE_NOTION && NOTION_TOKEN && NOTION_PAGE_ID && notionBuffer.length > 0) {
-    const text = notionBuffer.map(t => `${t.speaker}: ${t.text}`).join('\n');
-    notionBuffer = [];
-    await writeToNotion(text);
-  }
-}, NOTION_WRITE_INTERVAL);
-
-// Add transcript to Notion buffer (call this from handleRecallTranscript)
-function bufferForNotion(speaker, text) {
-  notionBuffer.push({ speaker, text, time: new Date().toISOString() });
-}
-
-// Expose endpoint to manually write to Notion
-app.post('/notion/write', async (req, res) => {
-  if (!ENABLE_NOTION || !NOTION_TOKEN || !NOTION_PAGE_ID) {
-    return res.status(503).json({ error: 'Notion integration disabled or not configured' });
-  }
-  const { text } = req.body;
-  if (text) {
-    await writeToNotion(text);
-    res.json({ ok: true });
-  } else {
-    res.status(400).json({ error: 'text required' });
-  }
-});
-
-if (ENABLE_NOTION && NOTION_TOKEN && NOTION_PAGE_ID) {
-  console.log('[Notion] Integration enabled');
-} else {
-  console.log('[Notion] Integration disabled');
-}
 
 // ============ MEETING CANVAS ============
 const meeting = require('./meeting-page.js');

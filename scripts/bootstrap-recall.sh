@@ -36,10 +36,6 @@ prompt "OPENCLAW_HOOK_URL" "OpenClaw hook URL (default http://127.0.0.1:18789/ho
 prompt "OPENCLAW_HOOK_TOKEN" "OpenClaw hook token" true
 prompt "TELEGRAM_BOT_TOKEN" "Telegram bot token (optional)" true
 prompt "TELEGRAM_CHAT_ID" "Telegram chat id (optional)"
-prompt "GOOGLE_DOC_ID" "Google Doc ID (optional for gdocs scripts)"
-prompt "GOOGLE_APPLICATION_CREDENTIALS" "Path to Google service account JSON (optional)"
-prompt "NOTION_TOKEN" "Notion token (optional, only if ENABLE_NOTION=true)" true
-prompt "NOTION_PAGE_ID" "Notion page/block id (optional)"
 
 cat <<MSG
 
