@@ -54,7 +54,15 @@ openclaw plugins info clawpilot
 ```text
 /clawpilot status
 ```
-4. Start a Recall bot into a meeting and confirm transcripts trigger copilot responses.
+4. Launch a meeting bot directly from chat:
+```text
+/clawpilot launch https://meet.google.com/abc-defg-hij
+```
+Optional custom name:
+```text
+/clawpilot launch https://meet.google.com/abc-defg-hij --name "Dan Note Taker"
+```
+5. Confirm transcripts trigger copilot responses.
 
 ## Components
 

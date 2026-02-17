@@ -6,9 +6,6 @@
 
 const express = require('express');
 const crypto = require('crypto');
-const { execSync } = require('child_process');
-
-const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3001;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -32,8 +29,28 @@ function parseIntegerLike(value, fallback) {
   return Number.isFinite(num) ? Math.round(num) : fallback;
 }
 
-// Serve static launcher page
-app.use(express.static(path.join(__dirname, 'public')));
+function sanitizeBotName(value, fallback = '') {
+  const normalized = String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return fallback;
+  return normalized.slice(0, 80);
+}
+
+function resolveBotName(options = {}) {
+  const requested = sanitizeBotName(options.requested || '');
+  if (requested) return requested;
+
+  const explicit = sanitizeBotName(process.env.RECALL_BOT_NAME || '');
+  if (explicit) return explicit;
+
+  const agentName = sanitizeBotName(
+    process.env.OPENCLAW_AGENT_NAME || process.env.CLAW_AGENT_NAME || process.env.AGENT_NAME || ''
+  );
+  const suffix = sanitizeBotName(process.env.RECALL_BOT_NAME_SUFFIX || 'Note Taker', 'Note Taker');
+  const base = agentName || 'OpenClaw';
+  return sanitizeBotName(`${base} ${suffix}`, 'OpenClaw Note Taker');
+}
 
 // Recall API key for verification
 const RECALL_API_KEY = process.env.RECALL_API_KEY;
@@ -512,7 +529,7 @@ async function waitForBotTerminal(botId, timeoutMs = BOT_REPLACE_WAIT_TIMEOUT_MS
 
 // Proxy endpoint to launch bots (avoids CORS)
 app.post('/launch', async (req, res) => {
-  const { meeting_url, language, provider, replace_active } = req.body;
+  const { meeting_url, language, provider, replace_active, bot_name } = req.body;
   
   if (!meeting_url) {
     return res.status(400).json({ error: 'meeting_url required' });
@@ -558,6 +575,7 @@ app.post('/launch', async (req, res) => {
   const requestedLang = language || DEFAULT_RECALL_LANGUAGE;
   const lang = requestedLang === 'multi' ? 'auto' : requestedLang;
   const prov = provider || 'recallai_streaming';
+  const resolvedBotName = resolveBotName({ requested: bot_name });
 
   // Build provider config (must use exact provider names from Recall API)
   let transcriptConfig;
@@ -584,7 +602,7 @@ app.post('/launch', async (req, res) => {
 
   const body = {
     meeting_url,
-    bot_name: 'Fugu 🐡',
+    bot_name: resolvedBotName,
     recording_config: {
       transcript: transcriptConfig,
       realtime_endpoints: [
@@ -610,7 +628,7 @@ app.post('/launch', async (req, res) => {
         'Authorization': `Token ${RECALL_API_KEY}`,
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(postData),
-        'User-Agent': 'Fugu-Meeting-Launcher/1.0'
+        'User-Agent': 'ClawPilot-Bridge/1.0'
       }
     };
 

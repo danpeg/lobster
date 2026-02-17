@@ -15,6 +15,7 @@ RECALL_LANGUAGE_CODE="${RECALL_LANGUAGE_CODE:-en}"
 REPLACE_ACTIVE_ON_DUPLICATE="${REPLACE_ACTIVE_ON_DUPLICATE:-true}"
 BOT_REPLACE_WAIT_TIMEOUT_SEC="${BOT_REPLACE_WAIT_TIMEOUT_SEC:-45}"
 BOT_REPLACE_POLL_SEC="${BOT_REPLACE_POLL_SEC:-2}"
+BOT_NAME="${BOT_NAME:-}"
 
 extract_meeting_url() {
   printf '%s\n' "$1" | grep -Eo 'https?://[^[:space:]<>"'"'"']+' | grep -E 'meet\.google\.com|([a-z0-9-]+\.)?zoom\.us|teams\.microsoft\.com|teams\.live\.com' | head -n 1
@@ -40,6 +41,28 @@ parse_meeting_target() {
 is_truthy() {
   local v="${1,,}"
   [[ "$v" == "1" || "$v" == "true" || "$v" == "yes" || "$v" == "y" ]]
+}
+
+sanitize_bot_name() {
+  printf '%s' "$1" | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//'
+}
+
+resolve_bot_name() {
+  local explicit="${BOT_NAME:-${RECALL_BOT_NAME:-}}"
+  explicit="$(sanitize_bot_name "$explicit")"
+  if [[ -n "$explicit" ]]; then
+    printf '%.80s' "$explicit"
+    return 0
+  fi
+
+  local agent_name="${OPENCLAW_AGENT_NAME:-${CLAW_AGENT_NAME:-${AGENT_NAME:-OpenClaw}}}"
+  local suffix="${RECALL_BOT_NAME_SUFFIX:-Note Taker}"
+  local combined
+  combined="$(sanitize_bot_name "${agent_name} ${suffix}")"
+  if [[ -z "$combined" ]]; then
+    combined="OpenClaw Note Taker"
+  fi
+  printf '%.80s' "$combined"
 }
 
 is_terminal_status() {
@@ -133,6 +156,7 @@ if [[ -z "$WEBHOOK_BASE_URL" ]]; then
 fi
 
 WEBHOOK_URL="${WEBHOOK_BASE_URL%/}/webhook?token=${WEBHOOK_SECRET}"
+BOT_NAME_RESOLVED="$(resolve_bot_name)"
 read -r MEETING_PLATFORM MEETING_ID <<<"$(parse_meeting_target "$MEETING_URL")"
 replaced_bot_id=''
 
@@ -184,11 +208,12 @@ fi
 payload="$(jq -nc \
   --arg meeting_url "$MEETING_URL" \
   --arg webhook_url "$WEBHOOK_URL" \
+  --arg bot_name "$BOT_NAME_RESOLVED" \
   --arg recall_stt_mode "$RECALL_STT_MODE" \
   --arg recall_language_code "$RECALL_LANGUAGE_CODE" \
   '{
     meeting_url: $meeting_url,
-    bot_name: "Fugu 🐡",
+    bot_name: $bot_name,
     recording_config: {
       transcript: {
         provider: {

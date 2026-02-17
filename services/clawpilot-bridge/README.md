@@ -7,6 +7,7 @@ Express service that receives Recall.ai webhook events and forwards transcript-d
 - Recall bot launch endpoint (`/launch`)
 - Recall webhook receiver (`/webhook`)
 - Copilot control endpoints (`/copilot/status`, `/mute`, `/unmute`, `/meetverbose/*`)
+- No browser launcher UI; launch is API/chat-driven only
 - Optional integrations on `experimental` branch:
   - Notion transcript mirroring
   - Google Docs helper scripts
@@ -28,6 +29,12 @@ npm start
 - `WEBHOOK_BASE_URL`
 - `OPENCLAW_HOOK_URL`
 - `OPENCLAW_HOOK_TOKEN`
+
+## Optional Bot Naming
+
+- `OPENCLAW_AGENT_NAME` -> default bot name becomes `<OPENCLAW_AGENT_NAME> Note Taker`
+- `RECALL_BOT_NAME` -> explicit override
+- `RECALL_BOT_NAME_SUFFIX` -> defaults to `Note Taker`
 
 ## Health Check
 
