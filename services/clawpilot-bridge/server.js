@@ -90,11 +90,26 @@ let DEBUG_MODE = parseBooleanLike(process.env.DEBUG_MODE, false);
 // Mute mode - stop processing transcripts (save tokens)
 let IS_MUTED = false;
 
+function deriveAgentHookUrl(wakeUrl) {
+  try {
+    const parsed = new URL(wakeUrl);
+    parsed.pathname = parsed.pathname.replace(/\/+$/, '').replace(/\/wake$/, '/agent');
+    if (!parsed.pathname.endsWith('/agent')) {
+      parsed.pathname = `${parsed.pathname}/agent`.replace(/\/{2,}/g, '/');
+    }
+    return parsed.toString();
+  } catch (err) {
+    return wakeUrl.replace(/\/+$/, '').replace(/\/wake$/, '/agent');
+  }
+}
+
+const OPENCLAW_AGENT_HOOK_URL = deriveAgentHookUrl(OPENCLAW_HOOK_URL);
+
 async function sendDebugTranscript(speaker, text, isPartial) {
   if (!DEBUG_MODE) return;
 
   const prefix = isPartial ? '[RAW PARTIAL]' : '[RAW FINAL]';
-  await sendToOpenClaw(`${prefix} ${speaker}: ${text}`);
+  await sendVerboseMirrorToOpenClaw(`${prefix} ${speaker}: ${text}`);
 
   if (!DEBUG_MIRROR_TELEGRAM || !TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
   try {
@@ -111,6 +126,47 @@ async function sendDebugTranscript(speaker, text, isPartial) {
     req.write(postData);
     req.end();
   } catch (e) {}
+}
+
+async function sendVerboseMirrorToOpenClaw(line) {
+  const sendStart = Date.now();
+  try {
+    if (!OPENCLAW_HOOK_TOKEN) {
+      console.error('[VerboseMirror] OPENCLAW_HOOK_TOKEN is required.');
+      return null;
+    }
+
+    const payload = {
+      message: `[MEETVERBOSE MIRROR]\nReply with exactly this line and nothing else:\n${line}`,
+      name: 'ClawPilot Verbose',
+      channel: 'last',
+      wakeMode: 'now',
+      deliver: true
+    };
+
+    const response = await fetch(OPENCLAW_AGENT_HOOK_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${OPENCLAW_HOOK_TOKEN}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const raw = await response.text();
+    let result;
+    try {
+      result = JSON.parse(raw);
+    } catch {
+      result = { ok: response.ok, raw };
+    }
+    const elapsed = Date.now() - sendStart;
+    console.log(`[VerboseMirror] ${elapsed}ms - ${response.ok ? "accepted" : "failed"}`);
+    return result;
+  } catch (error) {
+    console.error("[VerboseMirror] Error:", error.message);
+    return null;
+  }
 }
 
 // Send "typing" indicator to Telegram
