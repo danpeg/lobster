@@ -48,6 +48,10 @@ OpenClaw integration values are loaded from `openclaw.json`:
 Optional bridge behavior:
 
 8. `DISCORD_DIRECT_DELIVERY` (default: `true`)
+9. Voice-in-meeting MVP config in `openclaw.json`:
+   - `integrations.elevenlabs.apiKey`
+   - `plugins.entries.clawpilot.config.voice` with `enabled`, `wakeNames`, `voiceId`
+   - Optional: `modelId`, `cooldownMs`, `minSilenceMs`, `maxChars`, `mirrorToChat`
 
 Routing is channel-agnostic by default (via OpenClaw hooks). Discord direct delivery is an optional reliability adapter with fallback to OpenClaw hooks.
 

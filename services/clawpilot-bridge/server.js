@@ -74,6 +74,38 @@ function readOpenClawHookDefaults() {
     }
     return '';
   }
+  function pickFirstNumber(candidates) {
+    for (const value of candidates) {
+      const num = Number(value);
+      if (Number.isFinite(num)) return Math.round(num);
+    }
+    return null;
+  }
+  function pickFirstBoolean(candidates) {
+    for (const value of candidates) {
+      const parsed = parseBooleanLike(value, null);
+      if (parsed !== null) return parsed;
+    }
+    return null;
+  }
+  function pickFirstStringArray(candidates) {
+    for (const value of candidates) {
+      if (Array.isArray(value)) {
+        const normalized = value
+          .map((item) => (typeof item === 'string' ? item.trim().toLowerCase() : ''))
+          .filter(Boolean);
+        if (normalized.length) return normalized;
+      }
+      if (typeof value === 'string') {
+        const normalized = value
+          .split(',')
+          .map((item) => item.trim().toLowerCase())
+          .filter(Boolean);
+        if (normalized.length) return normalized;
+      }
+    }
+    return [];
+  }
 
   try {
     const raw = fs.readFileSync(configPath, 'utf8');
@@ -94,11 +126,82 @@ function readOpenClawHookDefaults() {
       cfg?.channels?.discord?.token,
       cfg?.channels?.discord?.bot_token
     ]);
+    const clawpilotCfg = cfg?.plugins?.entries?.clawpilot?.config || {};
+    const voiceCfg = typeof clawpilotCfg?.voice === 'object' && clawpilotCfg.voice
+      ? clawpilotCfg.voice
+      : {};
+    const elevenlabsCfg = (cfg?.integrations && typeof cfg.integrations.elevenlabs === 'object')
+      ? cfg.integrations.elevenlabs
+      : {};
+    const elevenlabsApiKey = pickFirstString([
+      voiceCfg?.elevenlabsApiKey,
+      elevenlabsCfg?.apiKey,
+      elevenlabsCfg?.key,
+      elevenlabsCfg?.token
+    ]);
+    const elevenlabsVoiceId = pickFirstString([
+      voiceCfg?.voiceId,
+      elevenlabsCfg?.voiceId
+    ]);
+    const elevenlabsModelId = pickFirstString([
+      voiceCfg?.modelId,
+      elevenlabsCfg?.modelId
+    ]);
+    const voiceEnabled = pickFirstBoolean([
+      voiceCfg?.enabled,
+      clawpilotCfg?.voiceEnabled
+    ]);
+    const voiceCooldownMs = pickFirstNumber([
+      voiceCfg?.cooldownMs,
+      clawpilotCfg?.voiceCooldownMs
+    ]);
+    const voiceMinSilenceMs = pickFirstNumber([
+      voiceCfg?.minSilenceMs,
+      clawpilotCfg?.voiceMinSilenceMs
+    ]);
+    const voiceMaxChars = pickFirstNumber([
+      voiceCfg?.maxChars,
+      clawpilotCfg?.voiceMaxChars
+    ]);
+    const voiceMirrorToChat = pickFirstBoolean([
+      voiceCfg?.mirrorToChat,
+      clawpilotCfg?.voiceMirrorToChat
+    ]);
+    const voiceWakeNames = pickFirstStringArray([
+      voiceCfg?.wakeNames,
+      clawpilotCfg?.voiceWakeNames
+    ]);
+    const voiceAutomaticAudioOutput = pickFirstBoolean([
+      voiceCfg?.automaticAudioOutput,
+      voiceCfg?.recallAutomaticAudioOutput,
+      clawpilotCfg?.voiceAutomaticAudioOutput
+    ]);
+    const voiceAutomaticAudioB64 = pickFirstString([
+      voiceCfg?.automaticAudioB64,
+      voiceCfg?.recallAutomaticAudioB64,
+      clawpilotCfg?.voiceAutomaticAudioB64
+    ]);
+    const voiceRequireWake = pickFirstBoolean([
+      voiceCfg?.requireWake,
+      clawpilotCfg?.voiceRequireWake
+    ]);
     return {
       hookUrl: `http://127.0.0.1:${gatewayPort}${hooksPath}/wake`,
       hookToken,
       telegramBotToken,
       discordBotToken,
+      elevenlabsApiKey,
+      elevenlabsVoiceId,
+      elevenlabsModelId,
+      voiceEnabled,
+      voiceCooldownMs,
+      voiceMinSilenceMs,
+      voiceMaxChars,
+      voiceMirrorToChat,
+      voiceWakeNames,
+      voiceAutomaticAudioOutput,
+      voiceAutomaticAudioB64,
+      voiceRequireWake,
       configPath
     };
   } catch {
@@ -107,6 +210,18 @@ function readOpenClawHookDefaults() {
       hookToken: '',
       telegramBotToken: '',
       discordBotToken: '',
+      elevenlabsApiKey: '',
+      elevenlabsVoiceId: '',
+      elevenlabsModelId: '',
+      voiceEnabled: null,
+      voiceCooldownMs: null,
+      voiceMinSilenceMs: null,
+      voiceMaxChars: null,
+      voiceMirrorToChat: null,
+      voiceWakeNames: [],
+      voiceAutomaticAudioOutput: null,
+      voiceAutomaticAudioB64: '',
+      voiceRequireWake: null,
       configPath
     };
   }
@@ -136,6 +251,10 @@ const MEETING_TRANSCRIPT_MAX_CHARS = Number(process.env.MEETING_TRANSCRIPT_MAX_C
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
 const TELEGRAM_BOT_TOKEN = OPENCLAW_HOOK_DEFAULTS.telegramBotToken || '';
 const TELEGRAM_BOT_TOKEN_SOURCE = OPENCLAW_HOOK_DEFAULTS.telegramBotToken ? 'openclaw.json' : 'missing';
+const TELEGRAM_DIRECT_DELIVERY = parseBooleanLike(process.env.TELEGRAM_DIRECT_DELIVERY, true);
+const TELEGRAM_MAX_MESSAGE_CHARS = 4096;
+const TELEGRAM_DIRECT_MAX_RETRIES = 2;
+const TELEGRAM_DIRECT_RETRY_BASE_MS = 1000;
 const DEBUG_MIRROR_TELEGRAM = parseBooleanLike(process.env.DEBUG_MIRROR_TELEGRAM, false);
 const CONTROL_SPEAKER_REGEX = process.env.CONTROL_SPEAKER_REGEX || '';
 const DISCORD_BOT_TOKEN = OPENCLAW_HOOK_DEFAULTS.discordBotToken || '';
@@ -144,9 +263,71 @@ const DISCORD_DIRECT_DELIVERY = parseBooleanLike(process.env.DISCORD_DIRECT_DELI
 const DISCORD_MAX_MESSAGE_CHARS = 2000;
 const DISCORD_DIRECT_MAX_RETRIES = 2;
 const DISCORD_DIRECT_RETRY_BASE_MS = 1000;
+const ELEVENLABS_API_KEY = OPENCLAW_HOOK_DEFAULTS.elevenlabsApiKey || process.env.ELEVENLABS_API_KEY || '';
+const ELEVENLABS_API_KEY_SOURCE = OPENCLAW_HOOK_DEFAULTS.elevenlabsApiKey
+  ? 'openclaw.json'
+  : (process.env.ELEVENLABS_API_KEY ? 'env' : 'missing');
+const ELEVENLABS_VOICE_ID = OPENCLAW_HOOK_DEFAULTS.elevenlabsVoiceId || process.env.ELEVENLABS_VOICE_ID || '';
+const ELEVENLABS_VOICE_ID_SOURCE = OPENCLAW_HOOK_DEFAULTS.elevenlabsVoiceId
+  ? 'openclaw.json'
+  : (process.env.ELEVENLABS_VOICE_ID ? 'env' : 'missing');
+const ELEVENLABS_MODEL_ID = OPENCLAW_HOOK_DEFAULTS.elevenlabsModelId || process.env.ELEVENLABS_MODEL_ID || 'eleven_turbo_v2_5';
+const VOICE_WAKE_NAMES = Array.isArray(OPENCLAW_HOOK_DEFAULTS.voiceWakeNames) && OPENCLAW_HOOK_DEFAULTS.voiceWakeNames.length
+  ? OPENCLAW_HOOK_DEFAULTS.voiceWakeNames
+  : ['fugu', 'clawpilot', 'copilot'];
+const VOICE_COOLDOWN_MS = OPENCLAW_HOOK_DEFAULTS.voiceCooldownMs === null
+  ? parseIntegerLike(process.env.VOICE_COOLDOWN_MS, 20000)
+  : parseIntegerLike(OPENCLAW_HOOK_DEFAULTS.voiceCooldownMs, parseIntegerLike(process.env.VOICE_COOLDOWN_MS, 20000));
+const VOICE_MIN_SILENCE_MS = OPENCLAW_HOOK_DEFAULTS.voiceMinSilenceMs === null
+  ? parseIntegerLike(process.env.VOICE_MIN_SILENCE_MS, 1200)
+  : parseIntegerLike(OPENCLAW_HOOK_DEFAULTS.voiceMinSilenceMs, parseIntegerLike(process.env.VOICE_MIN_SILENCE_MS, 1200));
+const VOICE_MAX_CHARS = OPENCLAW_HOOK_DEFAULTS.voiceMaxChars === null
+  ? parseIntegerLike(process.env.VOICE_MAX_CHARS, 220)
+  : parseIntegerLike(OPENCLAW_HOOK_DEFAULTS.voiceMaxChars, parseIntegerLike(process.env.VOICE_MAX_CHARS, 220));
+const VOICE_MIRROR_TO_CHAT = parseBooleanLike(OPENCLAW_HOOK_DEFAULTS.voiceMirrorToChat, true);
+const VOICE_PROVIDER = process.env.VOICE_PROVIDER || 'elevenlabs';
+const RECALL_SILENT_MP3_B64 =
+  'SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjYwLjE2LjEwMAAAAAAAAAAAAAAA//tAwAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAAFAAACvgBoaGhoaGho' +
+  'aGhoaGhoaGhoaGhojo6Ojo6Ojo6Ojo6Ojo6Ojo6Ojo60tLS0tLS0tLS0tLS0tLS0tLS0tNra2tra2tra2tra2tra2tra2tra////////////////////////' +
+  '//8AAAAATGF2YzYwLjMxAAAAAAAAAAAAAAAAJAMGAAAAAAAAAr4QurGFAAAAAAD/+xDEAAPAAAGkAAAAIAAANIAAAARMQU1FMy4xMDBVVVVVVVVVVVVVVVVV' +
+  'VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVf/7EMQpg8AAAaQAAAAgAAA0gAAABFVVVVVVVVVV' +
+  'VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//sQxFMDwAABpAAAACAA' +
+  'ADSAAAAEVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVX/' +
+  '+xDEfIPAAAGkAAAAIAAANIAAAARVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV' +
+  'VVVVVVVVVVVVVVVVVf/7EMSmA8AAAaQAAAAgAAA0gAAABFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV' +
+  'VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV';
+const VOICE_AUTOMATIC_AUDIO_OUTPUT = parseBooleanLike(
+  OPENCLAW_HOOK_DEFAULTS.voiceAutomaticAudioOutput,
+  parseBooleanLike(process.env.VOICE_AUTOMATIC_AUDIO_OUTPUT, true)
+);
+const VOICE_AUTOMATIC_AUDIO_B64 = OPENCLAW_HOOK_DEFAULTS.voiceAutomaticAudioB64 || RECALL_SILENT_MP3_B64;
+const VOICE_AUTOMATIC_AUDIO_SOURCE = OPENCLAW_HOOK_DEFAULTS.voiceAutomaticAudioB64
+  ? 'openclaw.json'
+  : 'builtin-silence';
+const VOICE_REQUIRE_WAKE = parseBooleanLike(
+  OPENCLAW_HOOK_DEFAULTS.voiceRequireWake,
+  parseBooleanLike(process.env.VOICE_REQUIRE_WAKE, false)
+);
+const VOICE_TRIGGER_ON_PARTIAL = parseBooleanLike(process.env.VOICE_TRIGGER_ON_PARTIAL, true);
+const VOICE_PRIME_ON_JOIN = parseBooleanLike(process.env.VOICE_PRIME_ON_JOIN, true);
+const VOICE_PRIME_WAIT_TIMEOUT_MS = parseIntegerLike(process.env.VOICE_PRIME_WAIT_TIMEOUT_MS, 90000);
+const VOICE_PRIME_POLL_MS = parseIntegerLike(process.env.VOICE_PRIME_POLL_MS, 2000);
+let VOICE_ENABLED = parseBooleanLike(
+  OPENCLAW_HOOK_DEFAULTS.voiceEnabled,
+  parseBooleanLike(process.env.VOICE_ENABLED, false)
+);
 
 if (DISCORD_DIRECT_DELIVERY && !DISCORD_BOT_TOKEN) {
   console.warn('[DiscordDirect] DISCORD_DIRECT_DELIVERY enabled but Discord bot token was not found in openclaw.json. Falling back to OpenClaw hooks.');
+}
+if (VOICE_ENABLED && !ELEVENLABS_API_KEY) {
+  console.warn('[VoiceMVP] Voice enabled but ElevenLabs API key is missing in openclaw.json. Voice output disabled until configured.');
+}
+if (VOICE_ENABLED && !ELEVENLABS_VOICE_ID) {
+  console.warn('[VoiceMVP] Voice enabled but ElevenLabs voiceId is missing in openclaw.json. Voice output disabled until configured.');
+}
+if (VOICE_ENABLED && !VOICE_AUTOMATIC_AUDIO_OUTPUT) {
+  console.warn('[VoiceMVP] Voice enabled but automatic audio output is disabled. Recall output_audio may fail unless the bot was launched with automatic_audio_output.');
 }
 
 // Debug mode - mirror raw final transcripts to active OpenClaw chat channel.
@@ -183,7 +364,59 @@ function safeParseJson(raw) {
   }
 }
 
+function escapeRegExp(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function compactSpeechText(value, maxChars = VOICE_MAX_CHARS) {
+  const normalized = String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return '';
+  return normalized.slice(0, Math.max(1, maxChars)).trim();
+}
+
+function buildVoiceWakeCandidates() {
+  const canonical = new Set(
+    (Array.isArray(VOICE_WAKE_NAMES) ? VOICE_WAKE_NAMES : [])
+      .map((item) => String(item || '').trim().toLowerCase())
+      .filter(Boolean)
+  );
+  // Recall STT often hears "fugu" as "google".
+  if (canonical.has('fugu')) {
+    canonical.add('google');
+  }
+  return Array.from(canonical);
+}
+
+const VOICE_WAKE_CANDIDATES = buildVoiceWakeCandidates();
+const VOICE_WAKE_REGEX = new RegExp(`\\b(?:${VOICE_WAKE_CANDIDATES.map(escapeRegExp).join('|')})\\b`, 'i');
+
 function splitDiscordMessage(content, maxChars = DISCORD_MAX_MESSAGE_CHARS) {
+  const text = String(content ?? '');
+  if (!text.trim()) return [];
+  if (text.length <= maxChars) return [text];
+
+  const chunks = [];
+  let remaining = text;
+  while (remaining.length > maxChars) {
+    let splitAt = remaining.lastIndexOf('\n', maxChars);
+    if (splitAt < Math.floor(maxChars * 0.5)) {
+      splitAt = remaining.lastIndexOf(' ', maxChars);
+    }
+    if (splitAt < Math.floor(maxChars * 0.5)) {
+      splitAt = maxChars;
+    }
+    chunks.push(remaining.slice(0, splitAt).trimEnd());
+    remaining = remaining.slice(splitAt).trimStart();
+  }
+  if (remaining.length) {
+    chunks.push(remaining);
+  }
+  return chunks.filter((chunk) => chunk.length > 0);
+}
+
+function splitTelegramMessage(content, maxChars = TELEGRAM_MAX_MESSAGE_CHARS) {
   const text = String(content ?? '');
   if (!text.trim()) return [];
   if (text.length <= maxChars) return [text];
@@ -230,6 +463,128 @@ function formatDiscordError(parsedBody, raw) {
   const text = String(raw || '').trim();
   if (!text) return 'Unknown Discord API error';
   return text.slice(0, 240);
+}
+
+function normalizeTelegramTarget(to) {
+  const raw = String(to || '').trim();
+  if (!raw) return '';
+  if (raw.toLowerCase().startsWith('telegram:')) {
+    return raw.slice('telegram:'.length).trim();
+  }
+  return raw;
+}
+
+function formatTelegramError(parsedBody, raw) {
+  if (parsedBody && typeof parsedBody.description === 'string') {
+    return parsedBody.description;
+  }
+  const text = String(raw || '').trim();
+  if (!text) return 'Unknown Telegram API error';
+  return text.slice(0, 240);
+}
+
+async function postToTelegramDirect(target, content) {
+  const chatId = normalizeTelegramTarget(target);
+  if (!chatId) {
+    return { ok: false, error: 'Missing telegram chat target', elapsed: 0, chunksTotal: 0, chunksSent: 0 };
+  }
+
+  const sendStart = Date.now();
+  const chunks = splitTelegramMessage(content, TELEGRAM_MAX_MESSAGE_CHARS);
+  if (!chunks.length) {
+    return { ok: false, error: 'Message is empty', elapsed: 0, chunksTotal: 0, chunksSent: 0 };
+  }
+
+  const totalAttempts = TELEGRAM_DIRECT_MAX_RETRIES + 1;
+  let chunksSent = 0;
+  let messageId = null;
+
+  for (let i = 0; i < chunks.length; i += 1) {
+    const chunk = chunks[i];
+    let delivered = false;
+
+    for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+      try {
+        const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: chunk,
+            disable_web_page_preview: true
+          })
+        });
+
+        const raw = await response.text();
+        const parsedBody = safeParseJson(raw);
+        const apiOk = parsedBody?.ok !== false;
+        if (response.ok && apiOk) {
+          delivered = true;
+          chunksSent += 1;
+          messageId = parsedBody?.result?.message_id || messageId;
+          break;
+        }
+
+        const retryAfterSec = Number(parsedBody?.parameters?.retry_after);
+        const waitMs = Number.isFinite(retryAfterSec) && retryAfterSec > 0
+          ? Math.ceil(retryAfterSec * 1000)
+          : TELEGRAM_DIRECT_RETRY_BASE_MS * Math.max(1, attempt);
+        const retryable = response.status === 429 || (response.status >= 500 && response.status < 600);
+        if (retryable && attempt < totalAttempts) {
+          console.warn(
+            `[TelegramDirect] retry route=${chatId} chunk=${i + 1}/${chunks.length} status=${response.status} attempt=${attempt}/${totalAttempts} wait_ms=${waitMs}`
+          );
+          await sleep(waitMs);
+          continue;
+        }
+
+        return {
+          ok: false,
+          error: formatTelegramError(parsedBody, raw),
+          status: response.status,
+          elapsed: Date.now() - sendStart,
+          chunksTotal: chunks.length,
+          chunksSent
+        };
+      } catch (error) {
+        if (attempt < totalAttempts) {
+          const waitMs = TELEGRAM_DIRECT_RETRY_BASE_MS * attempt;
+          console.warn(
+            `[TelegramDirect] retry route=${chatId} chunk=${i + 1}/${chunks.length} attempt=${attempt}/${totalAttempts} error=${error.message} wait_ms=${waitMs}`
+          );
+          await sleep(waitMs);
+          continue;
+        }
+        return {
+          ok: false,
+          error: error.message,
+          elapsed: Date.now() - sendStart,
+          chunksTotal: chunks.length,
+          chunksSent
+        };
+      }
+    }
+
+    if (!delivered) {
+      return {
+        ok: false,
+        error: 'Direct delivery retries exhausted',
+        elapsed: Date.now() - sendStart,
+        chunksTotal: chunks.length,
+        chunksSent
+      };
+    }
+  }
+
+  return {
+    ok: true,
+    elapsed: Date.now() - sendStart,
+    chunksTotal: chunks.length,
+    chunksSent,
+    messageId
+  };
 }
 
 async function postToDiscordDirect(channelId, content) {
@@ -330,6 +685,12 @@ const DIRECT_CHANNEL_ADAPTERS = {
     isConfigured: () => Boolean(DISCORD_BOT_TOKEN),
     tokenSource: () => DISCORD_BOT_TOKEN_SOURCE,
     deliver: async (routeTarget, content) => postToDiscordDirect(routeTarget.to, content)
+  },
+  telegram: {
+    isEnabled: () => TELEGRAM_DIRECT_DELIVERY,
+    isConfigured: () => Boolean(TELEGRAM_BOT_TOKEN),
+    tokenSource: () => TELEGRAM_BOT_TOKEN_SOURCE,
+    deliver: async (routeTarget, content) => postToTelegramDirect(routeTarget.to, content)
   }
 };
 
@@ -388,6 +749,372 @@ async function postToOpenClawJson(url, payload) {
   const raw = await response.text();
   const result = safeParseJson(raw) || { ok: response.ok, raw };
   return { response, result };
+}
+
+function parseVoiceTrigger(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+
+  const wakePattern = VOICE_WAKE_CANDIDATES.map(escapeRegExp).join('|');
+  const hasWakeWord = VOICE_WAKE_REGEX.test(raw);
+
+  if (hasWakeWord) {
+    const directMatch = raw.match(
+      new RegExp(`\\b(?:${wakePattern})\\b[\\s,:-]*(?:please\\s+)?(?:say|speak|answer|respond|share)\\b[\\s,:-]*(.+)$`, 'i')
+    );
+    if (directMatch?.[1]) {
+      const directText = compactSpeechText(directMatch[1]);
+      if (directText) return { kind: 'direct', text: directText };
+    }
+
+    const queryMatch = raw.match(new RegExp(`\\b(?:${wakePattern})\\b[\\s,:-]*(.+\\?)$`, 'i'));
+    if (queryMatch?.[1]) {
+      return { kind: 'question', text: compactSpeechText(queryMatch[1], 140) };
+    }
+
+  if (/\b(what do you think|please answer|answer please|any thoughts|help us|summarize|recap)\b/i.test(raw)) {
+      return { kind: 'assist', text: '' };
+    }
+  }
+
+  if (VOICE_REQUIRE_WAKE) {
+    return null;
+  }
+
+  // No-wake mode: accept explicit "say/speak/answer" directives with light filler tolerated.
+  const fallbackDirect = raw.match(
+    /^(?:(?:uh|um|hey|yo|ok|okay|google|go)\s+){0,3}(?:(?:can|could|would|will)\s+you|i\s+want\s+you\s+to|i\s+need\s+you\s+to|please|just)?[\s,:-]*(?:say|speak|answer|respond|share)\b[\s,:-]*(.+)$/i
+  );
+  if (fallbackDirect?.[1]) {
+    const directText = compactSpeechText(fallbackDirect[1]);
+    if (directText) return { kind: 'direct', text: directText };
+  }
+
+  const fallbackQuestion = raw.match(
+    /^(?:(?:uh|um|hey|yo|ok|okay|google|go)\s+){0,3}(?:(?:can|could|would|will)\s+you|please)?[\s,:-]*(?:answer|respond)\b[\s,:-]*(.+\?)$/i
+  );
+  if (fallbackQuestion?.[1]) {
+    return { kind: 'question', text: compactSpeechText(fallbackQuestion[1], 140) };
+  }
+
+  return null;
+}
+
+function buildMvpVoiceReply(trigger, speaker) {
+  if (trigger?.kind === 'direct' && trigger.text) {
+    return compactSpeechText(trigger.text);
+  }
+
+  const recentFinals = transcriptBuffer
+    .filter((item) => !item.partial && item.text)
+    .slice(-8);
+  const recentText = recentFinals.map((item) => item.text).join(' ').toLowerCase();
+  const lastOther = [...recentFinals].reverse().find(
+    (item) => item.speaker !== speaker && !VOICE_WAKE_REGEX.test(item.text)
+  );
+  const cue = compactSpeechText(lastOther?.text || '', 120);
+
+  let tail = 'Let us align on the decision, owner, and next step before we move on.';
+  if (/\b(price|pricing|budget|cost|spend)\b/.test(recentText)) {
+    tail = 'Let us agree the budget range and owner before committing next actions.';
+  } else if (/\b(timeline|deadline|date|when|schedule)\b/.test(recentText)) {
+    tail = 'Let us lock the timeline and assign one owner for the next milestone.';
+  } else if (/\b(risk|concern|blocker|issue|problem)\b/.test(recentText)) {
+    tail = 'Let us name the biggest blocker and pick one concrete mitigation now.';
+  }
+
+  const prefix = cue ? `Quick take: ${cue}. ` : 'Quick take: ';
+  return compactSpeechText(`${prefix}${tail}`);
+}
+
+async function synthesizeElevenLabsSpeech(text) {
+  const response = await fetch(
+    `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(ELEVENLABS_VOICE_ID)}?output_format=mp3_44100_128`,
+    {
+      method: 'POST',
+      headers: {
+        'xi-api-key': ELEVENLABS_API_KEY,
+        'Content-Type': 'application/json',
+        'Accept': 'audio/mpeg'
+      },
+      body: JSON.stringify({
+        text,
+        model_id: ELEVENLABS_MODEL_ID
+      })
+    }
+  );
+
+  const payloadBuffer = Buffer.from(await response.arrayBuffer());
+  if (!response.ok) {
+    const errorText = payloadBuffer.toString('utf8').slice(0, 240);
+    return { ok: false, status: response.status, error: errorText || 'ElevenLabs request failed' };
+  }
+
+  if (!payloadBuffer.length) {
+    return { ok: false, error: 'ElevenLabs returned empty audio payload' };
+  }
+
+  return { ok: true, b64Data: payloadBuffer.toString('base64') };
+}
+
+async function postRecallAudioPayload(botId, endpoint, payload) {
+  const response = await fetch(`${RECALL_BOTS_ENDPOINT}/${botId}/${endpoint}/`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Token ${RECALL_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+  const raw = await response.text();
+  const parsed = safeParseJson(raw) || raw;
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      error: typeof parsed === 'string' ? parsed.slice(0, 240) : JSON.stringify(parsed).slice(0, 240)
+    };
+  }
+  return { ok: true, status: response.status };
+}
+
+async function sendRecallOutputAudio(botId, b64Data) {
+  const payload = { kind: 'mp3', b64_data: b64Data };
+  const primary = await postRecallAudioPayload(botId, 'output_audio', payload);
+  if (primary.ok) {
+    return { ok: true, endpoint: 'output_audio', status: primary.status };
+  }
+
+  if (primary.status !== 404 && primary.status !== 405) {
+    return { ...primary, endpoint: 'output_audio' };
+  }
+
+  const fallback = await postRecallAudioPayload(botId, 'output_media', payload);
+  if (fallback.ok) {
+    return { ok: true, endpoint: 'output_media', status: fallback.status };
+  }
+  return {
+    ...fallback,
+    endpoint: 'output_media',
+    fallback_from: 'output_audio',
+    primary_error: primary.error
+  };
+}
+
+const lastVoiceAtByBotId = new Map();
+const voiceTaskByBotId = new Map();
+const voicePrimedBotIds = new Set();
+let lastVoiceDebug = {
+  at: null,
+  stage: 'init',
+  bot_id: null,
+  speaker: null,
+  transcript: null,
+  trigger: null,
+  result: null
+};
+let lastPrimeDebug = {
+  at: null,
+  stage: 'init',
+  bot_id: null,
+  result: null
+};
+
+function enqueueVoiceTask(botId, taskFn) {
+  const key = botId || '__global__';
+  const previous = voiceTaskByBotId.get(key) || Promise.resolve();
+  const next = previous
+    .catch(() => {})
+    .then(taskFn)
+    .finally(() => {
+      if (voiceTaskByBotId.get(key) === next) {
+        voiceTaskByBotId.delete(key);
+      }
+    });
+  voiceTaskByBotId.set(key, next);
+  return next;
+}
+
+function voiceConfigured() {
+  return Boolean(VOICE_ENABLED && ELEVENLABS_API_KEY && ELEVENLABS_VOICE_ID && RECALL_API_KEY);
+}
+
+async function maybePrimeVoiceOutputOnJoin(botId) {
+  if (!botId || !VOICE_PRIME_ON_JOIN || !VOICE_AUTOMATIC_AUDIO_OUTPUT || !RECALL_API_KEY) {
+    lastPrimeDebug = {
+      at: new Date().toISOString(),
+      stage: 'prime_skipped_config',
+      bot_id: botId || null,
+      result: null
+    };
+    return;
+  }
+  if (voicePrimedBotIds.has(botId)) {
+    lastPrimeDebug = {
+      at: new Date().toISOString(),
+      stage: 'prime_skipped_already',
+      bot_id: botId,
+      result: null
+    };
+    return;
+  }
+  lastPrimeDebug = {
+    at: new Date().toISOString(),
+    stage: 'prime_requested',
+    bot_id: botId,
+    result: null
+  };
+  voicePrimedBotIds.add(botId);
+  const prime = await sendRecallOutputAudio(botId, VOICE_AUTOMATIC_AUDIO_B64);
+  if (!prime.ok) {
+    // Allow retry on next trigger/launch monitor tick.
+    voicePrimedBotIds.delete(botId);
+    console.warn(
+      `[VoiceMVP] prime_on_join failed bot=${botId} status=${prime.status || 'n/a'} error=${prime.error || 'unknown'}`
+    );
+    lastPrimeDebug = {
+      at: new Date().toISOString(),
+      stage: 'prime_failed',
+      bot_id: botId,
+      result: {
+        status: prime.status || null,
+        error: prime.error || 'unknown'
+      }
+    };
+    return;
+  }
+  lastPrimeDebug = {
+    at: new Date().toISOString(),
+    stage: 'prime_ok',
+    bot_id: botId,
+    result: {
+      endpoint: prime.endpoint || null,
+      status: prime.status || null
+    }
+  };
+  console.log(`[VoiceMVP] prime_on_join ok bot=${botId} endpoint=${prime.endpoint}`);
+}
+
+async function schedulePrimeOnLaunch(botId) {
+  if (!botId || !VOICE_PRIME_ON_JOIN) return;
+  lastPrimeDebug = {
+    at: new Date().toISOString(),
+    stage: 'launch_monitor_started',
+    bot_id: botId || null,
+    result: null
+  };
+  const deadline = Date.now() + Math.max(10000, VOICE_PRIME_WAIT_TIMEOUT_MS);
+  while (Date.now() < deadline) {
+    const code = await getBotStatusCode(botId);
+    if (code === 'in_call_recording') {
+      lastPrimeDebug = {
+        at: new Date().toISOString(),
+        stage: 'launch_monitor_recording',
+        bot_id: botId,
+        result: code
+      };
+      await maybePrimeVoiceOutputOnJoin(botId);
+      return;
+    }
+    if (isTerminalBotCode(code)) {
+      lastPrimeDebug = {
+        at: new Date().toISOString(),
+        stage: 'launch_monitor_terminal',
+        bot_id: botId,
+        result: code
+      };
+      console.log(`[VoiceMVP] prime_on_join skipped bot=${botId} terminal_status=${code}`);
+      return;
+    }
+    await sleep(Math.max(500, VOICE_PRIME_POLL_MS));
+  }
+  lastPrimeDebug = {
+    at: new Date().toISOString(),
+    stage: 'launch_monitor_timeout',
+    bot_id: botId,
+    result: VOICE_PRIME_WAIT_TIMEOUT_MS
+  };
+  console.warn(`[VoiceMVP] prime_on_join timeout bot=${botId} wait_ms=${VOICE_PRIME_WAIT_TIMEOUT_MS}`);
+}
+
+async function maybeSpeakTriggeredLine({ botId, speaker, text, isPartial = false }) {
+  lastVoiceDebug = {
+    at: new Date().toISOString(),
+    stage: 'received',
+    bot_id: botId || null,
+    speaker: speaker || null,
+    transcript: String(text || ''),
+    is_partial: Boolean(isPartial),
+    trigger: null,
+    result: null
+  };
+  if (!VOICE_ENABLED) return;
+  const trigger = parseVoiceTrigger(text);
+  if (!trigger) return;
+  if (isPartial && (!VOICE_TRIGGER_ON_PARTIAL || trigger.kind !== 'direct')) return;
+  lastVoiceDebug.trigger = trigger;
+  lastVoiceDebug.stage = 'trigger_detected';
+  if (!botId) {
+    console.warn('[VoiceMVP] Trigger detected but bot_id missing; cannot send output_audio.');
+    lastVoiceDebug.stage = 'failed_missing_bot_id';
+    lastVoiceDebug.result = 'missing_bot_id';
+    return;
+  }
+  if (!voiceConfigured()) {
+    console.warn('[VoiceMVP] Trigger detected but voice is not fully configured.');
+    lastVoiceDebug.stage = 'failed_not_configured';
+    lastVoiceDebug.result = 'not_configured';
+    return;
+  }
+
+  await enqueueVoiceTask(botId, async () => {
+    lastVoiceDebug.stage = 'queued';
+    const now = Date.now();
+    const lastVoiceAt = lastVoiceAtByBotId.get(botId) || 0;
+    if (now - lastVoiceAt < VOICE_COOLDOWN_MS) {
+      console.log(`[VoiceMVP] cooldown skip bot=${botId} wait_ms=${VOICE_COOLDOWN_MS - (now - lastVoiceAt)}`);
+      lastVoiceDebug.stage = 'cooldown_skip';
+      lastVoiceDebug.result = `wait_ms=${VOICE_COOLDOWN_MS - (now - lastVoiceAt)}`;
+      return;
+    }
+
+    await sleep(VOICE_MIN_SILENCE_MS);
+    const line = buildMvpVoiceReply(trigger, speaker);
+    if (!line) return;
+    lastVoiceDebug.stage = 'tts_request';
+    lastVoiceDebug.result = line;
+
+    const tts = await synthesizeElevenLabsSpeech(line);
+    if (!tts.ok) {
+      console.error(`[VoiceMVP] TTS failed bot=${botId} error=${tts.error || 'unknown'}`);
+      lastVoiceDebug.stage = 'tts_failed';
+      lastVoiceDebug.result = tts.error || 'unknown';
+      return;
+    }
+    lastVoiceDebug.stage = 'tts_ok';
+
+    const delivery = await sendRecallOutputAudio(botId, tts.b64Data);
+    if (!delivery.ok) {
+      console.error(
+        `[VoiceMVP] Recall ${delivery.endpoint || 'output_audio'} failed bot=${botId} status=${delivery.status || 'n/a'} error=${delivery.error || 'unknown'}`
+      );
+      lastVoiceDebug.stage = 'delivery_failed';
+      lastVoiceDebug.result = {
+        endpoint: delivery.endpoint || null,
+        status: delivery.status || null,
+        error: delivery.error || 'unknown'
+      };
+      return;
+    }
+
+    lastVoiceAtByBotId.set(botId, Date.now());
+    console.log(`[VoiceMVP] spoke bot=${botId} speaker=${speaker} chars=${line.length} endpoint=${delivery.endpoint}`);
+    lastVoiceDebug.stage = 'spoke';
+    lastVoiceDebug.result = { endpoint: delivery.endpoint || null, chars: line.length };
+    if (VOICE_MIRROR_TO_CHAT) {
+      await sendVerboseMirrorToOpenClaw(`[MEETING VOICE] ${line}`, { botId });
+    }
+  });
 }
 
 async function sendDebugTranscript(speaker, text, isPartial, options = {}) {
@@ -579,6 +1306,12 @@ function setMeetVerboseState(nextEnabled, reason = 'manual') {
   return { muted: IS_MUTED, meetverbose: DEBUG_MODE };
 }
 
+function setVoiceState(nextEnabled, reason = 'manual') {
+  VOICE_ENABLED = Boolean(nextEnabled);
+  console.log(`[VOICE ${VOICE_ENABLED ? 'ON' : 'OFF'}] Meeting speech ${VOICE_ENABLED ? 'enabled' : 'disabled'} reason=${reason}`);
+  return { muted: IS_MUTED, meetverbose: DEBUG_MODE, voice: VOICE_ENABLED };
+}
+
 function parseTranscriptControlCommand(speaker, text) {
   if (CONTROL_SPEAKER_REGEX) {
     try {
@@ -605,6 +1338,12 @@ function parseTranscriptControlCommand(speaker, text) {
   }
   if (['/meetverbose off', 'meetverbose off', 'verbose off', 'transcript debug off'].includes(normalized)) {
     return { type: 'meetverbose_off', ack: 'Transcript debug is OFF. I will send only copilot guidance.' };
+  }
+  if (['/voice on', 'voice on', 'meeting voice on'].includes(normalized)) {
+    return { type: 'voice_on', ack: 'Meeting voice is ON. I will speak when explicitly asked.' };
+  }
+  if (['/voice off', 'voice off', 'meeting voice off'].includes(normalized)) {
+    return { type: 'voice_off', ack: 'Meeting voice is OFF. I will remain text-only.' };
   }
   return null;
 }
@@ -636,6 +1375,24 @@ app.get('/health', (req, res) => {
       direct_delivery: DISCORD_DIRECT_DELIVERY,
       token_set: Boolean(DISCORD_BOT_TOKEN),
       token_source: DISCORD_BOT_TOKEN_SOURCE
+    },
+    voice: {
+      enabled: VOICE_ENABLED,
+      provider: VOICE_PROVIDER,
+      configured: voiceConfigured(),
+      automatic_audio_output: VOICE_AUTOMATIC_AUDIO_OUTPUT,
+      prime_on_join: VOICE_PRIME_ON_JOIN,
+      automatic_audio_payload_source: VOICE_AUTOMATIC_AUDIO_SOURCE,
+      require_wake: VOICE_REQUIRE_WAKE,
+      trigger_on_partial: VOICE_TRIGGER_ON_PARTIAL,
+      wake_names: VOICE_WAKE_NAMES,
+      cooldown_ms: VOICE_COOLDOWN_MS,
+      min_silence_ms: VOICE_MIN_SILENCE_MS,
+      max_chars: VOICE_MAX_CHARS,
+      mirror_to_chat: VOICE_MIRROR_TO_CHAT,
+      elevenlabs_api_key_source: ELEVENLABS_API_KEY_SOURCE,
+      elevenlabs_voice_id_source: ELEVENLABS_VOICE_ID_SOURCE,
+      queue_size: voiceTaskByBotId.size
     },
     direct_delivery_adapters: getDirectDeliveryStatus(),
     telegram: {
@@ -687,6 +1444,24 @@ app.get('/copilot/status', (req, res) => {
       direct_delivery: DISCORD_DIRECT_DELIVERY,
       token_set: Boolean(DISCORD_BOT_TOKEN),
       token_source: DISCORD_BOT_TOKEN_SOURCE
+    },
+    voice: {
+      enabled: VOICE_ENABLED,
+      provider: VOICE_PROVIDER,
+      configured: voiceConfigured(),
+      automatic_audio_output: VOICE_AUTOMATIC_AUDIO_OUTPUT,
+      prime_on_join: VOICE_PRIME_ON_JOIN,
+      automatic_audio_payload_source: VOICE_AUTOMATIC_AUDIO_SOURCE,
+      require_wake: VOICE_REQUIRE_WAKE,
+      trigger_on_partial: VOICE_TRIGGER_ON_PARTIAL,
+      wake_names: VOICE_WAKE_NAMES,
+      cooldown_ms: VOICE_COOLDOWN_MS,
+      min_silence_ms: VOICE_MIN_SILENCE_MS,
+      max_chars: VOICE_MAX_CHARS,
+      mirror_to_chat: VOICE_MIRROR_TO_CHAT,
+      elevenlabs_api_key_source: ELEVENLABS_API_KEY_SOURCE,
+      elevenlabs_voice_id_source: ELEVENLABS_VOICE_ID_SOURCE,
+      queue_size: voiceTaskByBotId.size
     },
     direct_delivery_adapters: getDirectDeliveryStatus(),
     telegram: {
@@ -1060,19 +1835,48 @@ app.post('/launch', async (req, res) => {
       ]
     }
   };
+  const launchBody = { ...body };
+  if (VOICE_AUTOMATIC_AUDIO_OUTPUT && VOICE_AUTOMATIC_AUDIO_B64) {
+    launchBody.automatic_audio_output = {
+      in_call_recording: {
+        data: {
+          kind: 'mp3',
+          b64_data: VOICE_AUTOMATIC_AUDIO_B64
+        }
+      }
+    };
+  }
 
   try {
-    const response = await fetch(`${RECALL_BOTS_ENDPOINT}/`, {
+    let response = await fetch(`${RECALL_BOTS_ENDPOINT}/`, {
       method: 'POST',
       headers: {
         'Authorization': `Token ${RECALL_API_KEY}`,
         'Content-Type': 'application/json',
         'User-Agent': 'ClawPilot-Bridge/1.0'
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify(launchBody)
     });
-
-    const data = await response.text();
+    let data = await response.text();
+    if (!response.ok && launchBody.automatic_audio_output) {
+      const parsedError = safeParseJson(data);
+      const errorText = String(
+        typeof parsedError === 'string' ? parsedError : JSON.stringify(parsedError || data)
+      );
+      if (response.status === 400 && /\bautomatic_audio_output\b|\bextra fields\b|\bunknown field\b|\bnot allowed\b/i.test(errorText)) {
+        console.warn('[Launch] automatic_audio_output rejected by Recall API. Retrying launch without voice bootstrap payload.');
+        response = await fetch(`${RECALL_BOTS_ENDPOINT}/`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Token ${RECALL_API_KEY}`,
+            'Content-Type': 'application/json',
+            'User-Agent': 'ClawPilot-Bridge/1.0'
+          },
+          body: JSON.stringify(body)
+        });
+        data = await response.text();
+      }
+    }
     try {
       const json = JSON.parse(data);
       if (replacedFromBotId) {
@@ -1083,6 +1887,9 @@ app.post('/launch', async (req, res) => {
         if (effectiveRouteTarget) {
           rememberBotRouteTarget(json.id, effectiveRouteTarget);
         }
+        schedulePrimeOnLaunch(json.id).catch((err) => {
+          console.warn(`[VoiceMVP] prime_on_join launch monitor error bot=${json.id} error=${err.message}`);
+        });
         json.meeting_session = normalizeMeetingSessionId(launchSessionId);
         json.routing_target = effectiveRouteTarget || null;
       }
@@ -1176,6 +1983,11 @@ async function handleBotStatus(event) {
       transcriptBuffer = []; // Reset buffer for new meeting
       resetMeetingCanvasForSession(sessionIdFromEvent || (botId !== 'unknown' ? meetingSessionByBotId.get(botId) : null) || activeMeetingSessionId);
       console.log(`[BotReady] ${botId} recording started`);
+      if (botId !== 'unknown') {
+        maybePrimeVoiceOutputOnJoin(botId).catch((err) => {
+          console.warn(`[VoiceMVP] prime_on_join error bot=${botId} error=${err.message}`);
+        });
+      }
       break;
     case 'bot.joining_call':
       console.log(`[BotStatus] ${botId} joining_call`);
@@ -1188,6 +2000,7 @@ async function handleBotStatus(event) {
       if (botId !== 'unknown') {
         meetingStartByBot.delete(botId);
         relativeEpochBaseByBot.delete(botId);
+        voicePrimedBotIds.delete(botId);
         forgetBotSession(botId);
       }
       console.log(`[BotStatus] ${botId} ended`);
@@ -1196,6 +2009,7 @@ async function handleBotStatus(event) {
       if (botId !== 'unknown') {
         meetingStartByBot.delete(botId);
         relativeEpochBaseByBot.delete(botId);
+        voicePrimedBotIds.delete(botId);
         forgetBotSession(botId);
       }
       const subCode = event.data?.data?.sub_code || 'unknown';
@@ -1312,6 +2126,12 @@ async function handleRecallTranscript(data, isPartial, event) {
   if (botId && eventSessionId) {
     rememberBotSession(botId, eventSessionId);
   }
+  if (botId) {
+    // Fallback path: status webhooks are optional, so ensure prime-on-join still runs.
+    maybePrimeVoiceOutputOnJoin(botId).catch((err) => {
+      console.warn(`[VoiceMVP] prime_on_join fallback error bot=${botId} error=${err.message}`);
+    });
+  }
   
   if (text) {
     if (!isPartial) {
@@ -1329,6 +2149,12 @@ async function handleRecallTranscript(data, isPartial, event) {
             break;
           case 'meetverbose_off':
             setMeetVerboseState(false, `voice:${speaker}`);
+            break;
+          case 'voice_on':
+            setVoiceState(true, `voice:${speaker}`);
+            break;
+          case 'voice_off':
+            setVoiceState(false, `voice:${speaker}`);
             break;
           default:
             break;
@@ -1382,14 +2208,28 @@ async function handleRecallTranscript(data, isPartial, event) {
     // Send typing indicator to show we're listening
     sendTypingIndicator();
     
+    const explicitVoiceTrigger = parseVoiceTrigger(text);
+    const shouldHandleVoiceTrigger = Boolean(
+      explicitVoiceTrigger && (!isPartial || (VOICE_TRIGGER_ON_PARTIAL && explicitVoiceTrigger.kind === 'direct'))
+    );
+
     // Debug mode: send raw transcript (only final, not partial - too spammy)
     if (!isPartial && !IS_MUTED) {
       sendDebugTranscript(speaker, text, isPartial, { botId });
       appendTranscriptToCanvas(eventSessionId, speaker, text, botId);
     }
+    if (!IS_MUTED && shouldHandleVoiceTrigger) {
+      maybeSpeakTriggeredLine({ botId, speaker, text, isPartial }).catch((err) => {
+        console.error('[VoiceMVP] trigger handler failed:', err.message);
+      });
+    }
     
     const force = !isPartial && hasHighValueCue(text);
     if (!isPartial || REACT_ON_PARTIAL) {
+      if (explicitVoiceTrigger && !isPartial) {
+        console.log('[VoiceMVP] explicit trigger detected; skipping text reaction for this line.');
+        return;
+      }
       await maybeReact({ webhookReceivedAtMs: nowMs, speechToWebhookMs: speechEndToWebhookMs, botId, isPartial, force });
     }
   }
@@ -1470,7 +2310,7 @@ async function runReaction(candidate, source) {
 
   try {
     const injectMs = await sendToOpenClaw(
-      `[MEETING TRANSCRIPT - Active copilot for meeting host]\n\n${candidate.context}\n\n---\nYou are a live meeting copilot coaching the host.\nReturn plain text only (no numbering, bullets, labels, or quotes).\nWrite one short interruption-worthy suggestion the host can say next.\nOptional: add one short follow-up question in the same message.\nKeep total under 32 words, concrete, and conversational.`,
+      `[MEETING TRANSCRIPT - Active copilot for meeting host]\n\n${candidate.context}\n\n---\nYou are a live meeting copilot coaching the host.\nReturn plain text only (no numbering, bullets, labels, or quotes).\nWrite one short interruption-worthy suggestion the host can say next.\nOptional: add one short follow-up question in the same message.\nKeep total under 32 words, concrete, and conversational.\nDo not mention setup, configuration, API keys, environment files, credentials, quotas, or tooling.`,
       { botId: candidate.meta.botId }
     );
     const webhookToInjectMs = candidate.meta.webhookReceivedAtMs
@@ -1529,7 +2369,14 @@ async function sendToOpenClaw(message, options = {}) {
   const text = `[MEETING TRANSCRIPT]\n${message}`;
   let direct = null;
   try {
-    direct = await tryDirectDelivery(routeTarget, text);
+    // FastInject should go through OpenClaw hooks so the agent can respond.
+    // Keep direct-delivery here only for Discord, where hook-deliver is known unreliable.
+    const allowDirectForFastInject = routeTarget?.channel === 'discord';
+    if (allowDirectForFastInject) {
+      direct = await tryDirectDelivery(routeTarget, text);
+    } else {
+      direct = { considered: false, attempted: false, delivered: false, result: null, reason: 'disabled_for_channel' };
+    }
     if (direct.delivered) {
       const directResult = direct.result;
       const elapsed = Date.now() - sendStart;
@@ -1615,6 +2462,52 @@ app.post('/meetverbose', (req, res) => {
     meetverbose: DEBUG_MODE,
     muted: IS_MUTED,
     message: DEBUG_MODE ? 'Raw transcript mirror ON (active chat channel)' : 'Raw transcript mirror OFF'
+  });
+});
+
+// Voice mode toggle endpoints
+app.post('/voice/on', (req, res) => {
+  const state = setVoiceState(true, 'http:/voice/on');
+  res.json({
+    ...state,
+    configured: voiceConfigured(),
+    message: 'Meeting voice ON (explicit trigger only)'
+  });
+});
+
+app.post('/voice/off', (req, res) => {
+  const state = setVoiceState(false, 'http:/voice/off');
+  res.json({
+    ...state,
+    configured: voiceConfigured(),
+    message: 'Meeting voice OFF'
+  });
+});
+
+app.get('/voice', (req, res) => {
+  res.json({
+    enabled: VOICE_ENABLED,
+    configured: voiceConfigured(),
+    provider: VOICE_PROVIDER,
+    automatic_audio_output: VOICE_AUTOMATIC_AUDIO_OUTPUT,
+    automatic_audio_payload_source: VOICE_AUTOMATIC_AUDIO_SOURCE,
+    require_wake: VOICE_REQUIRE_WAKE,
+    trigger_on_partial: VOICE_TRIGGER_ON_PARTIAL,
+    wake_names: VOICE_WAKE_NAMES,
+    cooldown_ms: VOICE_COOLDOWN_MS,
+    min_silence_ms: VOICE_MIN_SILENCE_MS,
+    max_chars: VOICE_MAX_CHARS,
+    mirror_to_chat: VOICE_MIRROR_TO_CHAT
+  });
+});
+
+app.get('/voice/debug', (req, res) => {
+  res.json({
+    voice_enabled: VOICE_ENABLED,
+    voice_configured: voiceConfigured(),
+    cooldown_ms: VOICE_COOLDOWN_MS,
+    last: lastVoiceDebug,
+    prime: lastPrimeDebug
   });
 });
 
@@ -1749,6 +2642,7 @@ app.listen(PORT, HOST, () => {
   console.log(`Health check: http://localhost:${PORT}/health`);
   console.log(`[OpenClawHook] wake=${OPENCLAW_HOOK_URL} agent=${OPENCLAW_AGENT_HOOK_URL}`);
   console.log(`[OpenClawHook] token=${OPENCLAW_HOOK_TOKEN ? 'set' : 'missing'} url_source=${OPENCLAW_HOOK_URL_SOURCE} token_source=${OPENCLAW_HOOK_TOKEN_SOURCE}`);
+  console.log(`[VoiceMVP] enabled=${VOICE_ENABLED} configured=${voiceConfigured()} provider=${VOICE_PROVIDER} require_wake=${VOICE_REQUIRE_WAKE} trigger_on_partial=${VOICE_TRIGGER_ON_PARTIAL} wake_names=${VOICE_WAKE_NAMES.join(',')}`);
   if (!OPENCLAW_HOOK_TOKEN) {
     console.warn(`[OpenClawHook] token missing. Configure hooks.token in ${OPENCLAW_HOOK_DEFAULTS.configPath}`);
   }

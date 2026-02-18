@@ -48,6 +48,20 @@ npm start
 - `DISCORD_DIRECT_DELIVERY` controls direct-first mode (default: `true`)
 - Discord direct delivery is an adapter; if it fails, bridge falls back to OpenClaw hook delivery
 
+## Voice-in-Meeting MVP
+
+- Explicit trigger only (default wake names: `fugu`, `clawpilot`, `copilot`)
+- Uses ElevenLabs TTS, then Recall `output_media` to speak in meeting
+- Configure in `openclaw.json`:
+  - `integrations.elevenlabs.apiKey`
+  - `plugins.entries.clawpilot.config.voice.enabled`
+  - `plugins.entries.clawpilot.config.voice.voiceId`
+  - Optional: `wakeNames`, `modelId`, `cooldownMs`, `minSilenceMs`, `maxChars`, `mirrorToChat`
+- Chat controls:
+  - `/clawpilot voice on`
+  - `/clawpilot voice off`
+  - `/clawpilot voice status`
+
 ## Reaction Style Defaults
 
 - Reactions are final-transcript driven by default (`REACT_ON_PARTIAL=false`)

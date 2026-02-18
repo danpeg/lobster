@@ -121,10 +121,16 @@ function buildHelpText() {
     '/clawpilot transcript off',
     '  Toggle raw transcript mirroring in active chat channel.',
     '',
+    '/clawpilot voice on',
+    '/clawpilot voice off',
+    '/clawpilot voice status',
+    '  Control in-meeting voice responses (explicit trigger mode).',
+    '',
     'Examples:',
     '/clawpilot join https://meet.google.com/abc-defg-hij',
     '/clawpilot join https://meet.google.com/abc-defg-hij --name "Sunny Note Taker"',
     '/clawpilot transcript on',
+    '/clawpilot voice on',
   ].join('\n');
 }
 
@@ -229,7 +235,7 @@ async function callBridge(api, path, options = 'GET') {
 export default function register(api) {
   api.registerCommand({
     name: 'clawpilot',
-    description: 'Control ClawPilot: help | status | join | pause | resume | transcript on|off',
+    description: 'Control ClawPilot: help | status | join | pause | resume | transcript on|off | voice on|off|status',
     acceptsArgs: true,
     handler: async (ctx) => {
       const rawArgs = (ctx.args || '').trim();
@@ -298,6 +304,30 @@ export default function register(api) {
               'Usage:',
               '/clawpilot transcript on',
               '/clawpilot transcript off',
+            ].join('\n'),
+          };
+        }
+
+        if (action === 'voice') {
+          const mode = (rest[0] || '').toLowerCase();
+          if (mode === 'on') {
+            const result = await callBridge(api, '/voice/on', 'POST');
+            return { text: `Voice mode ON.\n${JSON.stringify(result, null, 2)}` };
+          }
+          if (mode === 'off') {
+            const result = await callBridge(api, '/voice/off', 'POST');
+            return { text: `Voice mode OFF.\n${JSON.stringify(result, null, 2)}` };
+          }
+          if (mode === 'status' || !mode) {
+            const result = await callBridge(api, '/voice');
+            return { text: `Voice status:\n${JSON.stringify(result, null, 2)}` };
+          }
+          return {
+            text: [
+              'Usage:',
+              '/clawpilot voice on',
+              '/clawpilot voice off',
+              '/clawpilot voice status',
             ].join('\n'),
           };
         }
