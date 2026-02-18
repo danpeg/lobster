@@ -32,11 +32,8 @@ sed -i '/=__PROMPT__/d' "$ENV_FILE"
 prompt "RECALL_API_KEY" "Recall API key" true
 prompt "WEBHOOK_SECRET" "Webhook secret (random long string)" true
 prompt "WEBHOOK_BASE_URL" "Public HTTPS base URL (example: https://example.com)"
-prompt "OPENCLAW_HOOK_URL" "OpenClaw hook URL (default http://127.0.0.1:18789/hooks/wake)"
-prompt "OPENCLAW_HOOK_TOKEN" "OpenClaw hook token" true
 prompt "OPENCLAW_AGENT_NAME" "OpenClaw agent name (used for default bot name)"
 prompt "RECALL_BOT_NAME" "Recall bot name override (optional)"
-prompt "TELEGRAM_BOT_TOKEN" "Telegram bot token (optional)" true
 prompt "TELEGRAM_CHAT_ID" "Telegram chat id (optional)"
 
 cat <<MSG

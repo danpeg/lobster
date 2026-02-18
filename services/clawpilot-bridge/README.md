@@ -28,14 +28,25 @@ npm start
 - `RECALL_API_BASE` (region endpoint, e.g. `https://us-east-1.recall.ai` or `https://eu-central-1.recall.ai`)
 - `WEBHOOK_SECRET`
 - `WEBHOOK_BASE_URL`
-- `OPENCLAW_HOOK_URL`
-- `OPENCLAW_HOOK_TOKEN`
+
+## OpenClaw Configuration Source
+
+- Hook URL/token are read from `openclaw.json` (`hooks.path`, `hooks.token`, `gateway.port`)
+- Discord bot token is read from `openclaw.json` (`channels.discord.botToken`)
+- Telegram bot token is read from `openclaw.json` (`channels.telegram.botToken`)
+- Set `OPENCLAW_CONFIG_PATH` if bridge should read a non-default `openclaw.json`
 
 ## Optional Bot Naming
 
 - `OPENCLAW_AGENT_NAME` -> default bot name becomes `<OPENCLAW_AGENT_NAME> Note Taker`
 - `RECALL_BOT_NAME` -> explicit override
 - `RECALL_BOT_NAME_SUFFIX` -> defaults to `Note Taker`
+
+## Optional Discord Delivery
+
+- Routing is channel-agnostic by default: all channels deliver via OpenClaw hooks
+- `DISCORD_DIRECT_DELIVERY` controls direct-first mode (default: `true`)
+- Discord direct delivery is an adapter; if it fails, bridge falls back to OpenClaw hook delivery
 
 ## Reaction Style Defaults
 

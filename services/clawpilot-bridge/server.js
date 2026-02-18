@@ -66,6 +66,15 @@ const RECALL_API_KEY = process.env.RECALL_API_KEY;
 
 function readOpenClawHookDefaults() {
   const configPath = process.env.OPENCLAW_CONFIG_PATH || path.join(os.homedir(), '.openclaw', 'openclaw.json');
+  function pickFirstString(candidates) {
+    for (const value of candidates) {
+      if (typeof value !== 'string') continue;
+      const trimmed = value.trim();
+      if (trimmed) return trimmed;
+    }
+    return '';
+  }
+
   try {
     const raw = fs.readFileSync(configPath, 'utf8');
     const cfg = JSON.parse(raw);
@@ -75,15 +84,29 @@ function readOpenClawHookDefaults() {
     const hooksPathWithSlash = hooksPathRaw ? (hooksPathRaw.startsWith('/') ? hooksPathRaw : `/${hooksPathRaw}`) : '/hooks';
     const hooksPath = (hooksPathWithSlash.length > 1 ? hooksPathWithSlash.replace(/\/+$/, '') : hooksPathWithSlash) || '/hooks';
     const hookToken = typeof cfg?.hooks?.token === 'string' ? cfg.hooks.token.trim() : '';
+    const telegramBotToken = pickFirstString([
+      cfg?.channels?.telegram?.botToken,
+      cfg?.channels?.telegram?.token,
+      cfg?.channels?.telegram?.bot_token
+    ]);
+    const discordBotToken = pickFirstString([
+      cfg?.channels?.discord?.botToken,
+      cfg?.channels?.discord?.token,
+      cfg?.channels?.discord?.bot_token
+    ]);
     return {
       hookUrl: `http://127.0.0.1:${gatewayPort}${hooksPath}/wake`,
       hookToken,
+      telegramBotToken,
+      discordBotToken,
       configPath
     };
   } catch {
     return {
       hookUrl: '',
       hookToken: '',
+      telegramBotToken: '',
+      discordBotToken: '',
       configPath
     };
   }
@@ -98,10 +121,10 @@ const RECALL_API_BASE = String(process.env.RECALL_API_BASE || 'https://eu-centra
 const RECALL_BOTS_ENDPOINT = `${RECALL_API_BASE}/api/v1/bot`;
 const DEFAULT_RECALL_LANGUAGE = process.env.RECALL_LANGUAGE_CODE || 'en';
 const DEFAULT_RECALL_STT_MODE = process.env.RECALL_STT_MODE || 'prioritize_low_latency';
-const OPENCLAW_HOOK_URL = process.env.OPENCLAW_HOOK_URL || OPENCLAW_HOOK_DEFAULTS.hookUrl || 'http://127.0.0.1:18789/hooks/wake';
-const OPENCLAW_HOOK_TOKEN = process.env.OPENCLAW_HOOK_TOKEN || OPENCLAW_HOOK_DEFAULTS.hookToken || '';
-const OPENCLAW_HOOK_URL_SOURCE = process.env.OPENCLAW_HOOK_URL ? 'env' : (OPENCLAW_HOOK_DEFAULTS.hookUrl ? 'openclaw.json' : 'builtin-default');
-const OPENCLAW_HOOK_TOKEN_SOURCE = process.env.OPENCLAW_HOOK_TOKEN ? 'env' : (OPENCLAW_HOOK_DEFAULTS.hookToken ? 'openclaw.json' : 'missing');
+const OPENCLAW_HOOK_URL = OPENCLAW_HOOK_DEFAULTS.hookUrl || 'http://127.0.0.1:18789/hooks/wake';
+const OPENCLAW_HOOK_TOKEN = OPENCLAW_HOOK_DEFAULTS.hookToken || '';
+const OPENCLAW_HOOK_URL_SOURCE = OPENCLAW_HOOK_DEFAULTS.hookUrl ? 'openclaw.json' : 'builtin-default';
+const OPENCLAW_HOOK_TOKEN_SOURCE = OPENCLAW_HOOK_DEFAULTS.hookToken ? 'openclaw.json' : 'missing';
 const REPLACE_ACTIVE_ON_DUPLICATE = process.env.REPLACE_ACTIVE_ON_DUPLICATE !== 'false';
 const BOT_REPLACE_WAIT_TIMEOUT_MS = Number(process.env.BOT_REPLACE_WAIT_TIMEOUT_MS || 45000);
 const BOT_REPLACE_POLL_MS = Number(process.env.BOT_REPLACE_POLL_MS || 1500);
@@ -111,9 +134,20 @@ const MEETING_TRANSCRIPT_MAX_CHARS = Number(process.env.MEETING_TRANSCRIPT_MAX_C
 
 // Optional Telegram bridge settings for debug/typing feedback
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+const TELEGRAM_BOT_TOKEN = OPENCLAW_HOOK_DEFAULTS.telegramBotToken || '';
+const TELEGRAM_BOT_TOKEN_SOURCE = OPENCLAW_HOOK_DEFAULTS.telegramBotToken ? 'openclaw.json' : 'missing';
 const DEBUG_MIRROR_TELEGRAM = parseBooleanLike(process.env.DEBUG_MIRROR_TELEGRAM, false);
 const CONTROL_SPEAKER_REGEX = process.env.CONTROL_SPEAKER_REGEX || '';
+const DISCORD_BOT_TOKEN = OPENCLAW_HOOK_DEFAULTS.discordBotToken || '';
+const DISCORD_BOT_TOKEN_SOURCE = OPENCLAW_HOOK_DEFAULTS.discordBotToken ? 'openclaw.json' : 'missing';
+const DISCORD_DIRECT_DELIVERY = parseBooleanLike(process.env.DISCORD_DIRECT_DELIVERY, true);
+const DISCORD_MAX_MESSAGE_CHARS = 2000;
+const DISCORD_DIRECT_MAX_RETRIES = 2;
+const DISCORD_DIRECT_RETRY_BASE_MS = 1000;
+
+if (DISCORD_DIRECT_DELIVERY && !DISCORD_BOT_TOKEN) {
+  console.warn('[DiscordDirect] DISCORD_DIRECT_DELIVERY enabled but Discord bot token was not found in openclaw.json. Falling back to OpenClaw hooks.');
+}
 
 // Debug mode - mirror raw final transcripts to active OpenClaw chat channel.
 // Optional Telegram mirroring can be enabled via DEBUG_MIRROR_TELEGRAM=true.
@@ -136,6 +170,225 @@ function deriveAgentHookUrl(wakeUrl) {
 }
 
 const OPENCLAW_AGENT_HOOK_URL = deriveAgentHookUrl(OPENCLAW_HOOK_URL);
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function safeParseJson(raw) {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function splitDiscordMessage(content, maxChars = DISCORD_MAX_MESSAGE_CHARS) {
+  const text = String(content ?? '');
+  if (!text.trim()) return [];
+  if (text.length <= maxChars) return [text];
+
+  const chunks = [];
+  let remaining = text;
+  while (remaining.length > maxChars) {
+    let splitAt = remaining.lastIndexOf('\n', maxChars);
+    if (splitAt < Math.floor(maxChars * 0.5)) {
+      splitAt = remaining.lastIndexOf(' ', maxChars);
+    }
+    if (splitAt < Math.floor(maxChars * 0.5)) {
+      splitAt = maxChars;
+    }
+    chunks.push(remaining.slice(0, splitAt).trimEnd());
+    remaining = remaining.slice(splitAt).trimStart();
+  }
+  if (remaining.length) {
+    chunks.push(remaining);
+  }
+  return chunks.filter((chunk) => chunk.length > 0);
+}
+
+function getDiscordRetryDelayMs(response, parsedBody, attempt) {
+  const bodyRetry = Number(parsedBody?.retry_after);
+  if (Number.isFinite(bodyRetry) && bodyRetry > 0) {
+    return Math.max(250, Math.ceil(bodyRetry * 1000));
+  }
+
+  const headerRetryRaw = response?.headers?.get?.('retry-after');
+  const headerRetry = Number(headerRetryRaw);
+  if (Number.isFinite(headerRetry) && headerRetry > 0) {
+    // Treat small values as seconds, large values as milliseconds.
+    return Math.max(250, Math.ceil(headerRetry < 100 ? headerRetry * 1000 : headerRetry));
+  }
+
+  return DISCORD_DIRECT_RETRY_BASE_MS * Math.max(1, attempt);
+}
+
+function formatDiscordError(parsedBody, raw) {
+  if (parsedBody && typeof parsedBody.message === 'string') {
+    return parsedBody.message;
+  }
+  const text = String(raw || '').trim();
+  if (!text) return 'Unknown Discord API error';
+  return text.slice(0, 240);
+}
+
+async function postToDiscordDirect(channelId, content) {
+  const sendStart = Date.now();
+  const chunks = splitDiscordMessage(content, DISCORD_MAX_MESSAGE_CHARS);
+  if (!chunks.length) {
+    return { ok: false, error: 'Message is empty', elapsed: 0, chunksTotal: 0, chunksSent: 0 };
+  }
+
+  const totalAttempts = DISCORD_DIRECT_MAX_RETRIES + 1;
+  let chunksSent = 0;
+  let messageId = null;
+
+  for (let i = 0; i < chunks.length; i += 1) {
+    const chunk = chunks[i];
+    let delivered = false;
+
+    for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+      try {
+        const response = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bot ${DISCORD_BOT_TOKEN}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ content: chunk })
+        });
+
+        const raw = await response.text();
+        const parsedBody = safeParseJson(raw);
+        if (response.ok) {
+          delivered = true;
+          chunksSent += 1;
+          messageId = parsedBody?.id || messageId;
+          break;
+        }
+
+        const retryable = response.status === 429 || (response.status >= 500 && response.status < 600);
+        if (retryable && attempt < totalAttempts) {
+          const waitMs = getDiscordRetryDelayMs(response, parsedBody, attempt);
+          console.warn(
+            `[DiscordDirect] retry route=${channelId} chunk=${i + 1}/${chunks.length} status=${response.status} attempt=${attempt}/${totalAttempts} wait_ms=${waitMs}`
+          );
+          await sleep(waitMs);
+          continue;
+        }
+
+        return {
+          ok: false,
+          error: formatDiscordError(parsedBody, raw),
+          status: response.status,
+          elapsed: Date.now() - sendStart,
+          chunksTotal: chunks.length,
+          chunksSent
+        };
+      } catch (error) {
+        if (attempt < totalAttempts) {
+          const waitMs = DISCORD_DIRECT_RETRY_BASE_MS * attempt;
+          console.warn(
+            `[DiscordDirect] retry route=${channelId} chunk=${i + 1}/${chunks.length} attempt=${attempt}/${totalAttempts} error=${error.message} wait_ms=${waitMs}`
+          );
+          await sleep(waitMs);
+          continue;
+        }
+        return {
+          ok: false,
+          error: error.message,
+          elapsed: Date.now() - sendStart,
+          chunksTotal: chunks.length,
+          chunksSent
+        };
+      }
+    }
+
+    if (!delivered) {
+      return {
+        ok: false,
+        error: 'Direct delivery retries exhausted',
+        elapsed: Date.now() - sendStart,
+        chunksTotal: chunks.length,
+        chunksSent
+      };
+    }
+  }
+
+  return {
+    ok: true,
+    elapsed: Date.now() - sendStart,
+    chunksTotal: chunks.length,
+    chunksSent,
+    messageId
+  };
+}
+
+const DIRECT_CHANNEL_ADAPTERS = {
+  discord: {
+    isEnabled: () => DISCORD_DIRECT_DELIVERY,
+    isConfigured: () => Boolean(DISCORD_BOT_TOKEN),
+    tokenSource: () => DISCORD_BOT_TOKEN_SOURCE,
+    deliver: async (routeTarget, content) => postToDiscordDirect(routeTarget.to, content)
+  }
+};
+
+function formatRouteText(routeTarget, fallback = 'wake') {
+  return routeTarget ? `${routeTarget.channel}:${routeTarget.to}` : fallback;
+}
+
+function getDirectAdapter(routeTarget) {
+  const channel = routeTarget?.channel;
+  if (!channel) return null;
+  return DIRECT_CHANNEL_ADAPTERS[channel] || null;
+}
+
+function getDirectDeliveryStatus() {
+  const status = {};
+  for (const [channel, adapter] of Object.entries(DIRECT_CHANNEL_ADAPTERS)) {
+    status[channel] = {
+      enabled: Boolean(adapter.isEnabled()),
+      configured: Boolean(adapter.isConfigured()),
+      token_source: adapter.tokenSource ? adapter.tokenSource() : 'unknown'
+    };
+  }
+  return status;
+}
+
+async function tryDirectDelivery(routeTarget, content) {
+  const adapter = getDirectAdapter(routeTarget);
+  if (!adapter || !routeTarget?.to) {
+    return { considered: false, attempted: false, delivered: false, result: null, reason: 'no_adapter' };
+  }
+
+  if (!adapter.isEnabled()) {
+    return { considered: true, attempted: false, delivered: false, result: null, reason: 'disabled' };
+  }
+
+  if (!adapter.isConfigured()) {
+    return { considered: true, attempted: false, delivered: false, result: null, reason: 'not_configured' };
+  }
+
+  const result = await adapter.deliver(routeTarget, content);
+  if (result.ok) {
+    return { considered: true, attempted: true, delivered: true, result, reason: 'ok' };
+  }
+  return { considered: true, attempted: true, delivered: false, result, reason: 'failed' };
+}
+
+async function postToOpenClawJson(url, payload) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${OPENCLAW_HOOK_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  const raw = await response.text();
+  const result = safeParseJson(raw) || { ok: response.ok, raw };
+  return { response, result };
+}
 
 async function sendDebugTranscript(speaker, text, isPartial, options = {}) {
   if (!DEBUG_MODE) return;
@@ -162,12 +415,29 @@ async function sendDebugTranscript(speaker, text, isPartial, options = {}) {
 
 async function sendVerboseMirrorToOpenClaw(line, options = {}) {
   const sendStart = Date.now();
+  const routeTarget = resolveRouteTarget(options.routeTarget, options.botId);
+  const routeText = formatRouteText(routeTarget, 'last');
+  let direct = null;
   try {
+    direct = await tryDirectDelivery(routeTarget, line);
+    if (direct.delivered) {
+      const directResult = direct.result;
+      const elapsed = Date.now() - sendStart;
+      console.log(
+        `[VerboseMirror] ${elapsed}ms - delivered_direct route=${routeText} chunks=${directResult.chunksSent}/${directResult.chunksTotal}`
+      );
+      return directResult;
+    }
+    if (direct.reason === 'failed') {
+      console.warn(
+        `[VerboseMirror] direct failed route=${routeText} error=${direct.result?.error || 'unknown'} fallback=openclaw`
+      );
+    }
+
     if (!OPENCLAW_HOOK_TOKEN) {
       console.error('[VerboseMirror] OPENCLAW_HOOK_TOKEN is required.');
       return null;
     }
-    const routeTarget = resolveRouteTarget(options.routeTarget, options.botId);
 
     const payload = {
       message: `[MEETVERBOSE MIRROR]\nReply with exactly this line and nothing else:\n${line}`,
@@ -178,25 +448,14 @@ async function sendVerboseMirrorToOpenClaw(line, options = {}) {
     if (routeTarget?.channel) payload.channel = routeTarget.channel;
     if (routeTarget?.to) payload.to = routeTarget.to;
 
-    const response = await fetch(OPENCLAW_AGENT_HOOK_URL, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${OPENCLAW_HOOK_TOKEN}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
+    const { response, result } = await postToOpenClawJson(OPENCLAW_AGENT_HOOK_URL, payload);
 
-    const raw = await response.text();
-    let result;
-    try {
-      result = JSON.parse(raw);
-    } catch {
-      result = { ok: response.ok, raw };
-    }
     const elapsed = Date.now() - sendStart;
-    const routeText = routeTarget ? `${routeTarget.channel}:${routeTarget.to}` : 'last';
-    console.log(`[VerboseMirror] ${elapsed}ms - ${response.ok ? "accepted" : "failed"} route=${routeText}`);
+    const usedFallback = direct?.attempted || direct?.reason === 'not_configured';
+    const statusText = response.ok
+      ? (usedFallback ? 'fallback_openclaw' : 'accepted')
+      : (usedFallback ? 'failed_after_direct' : 'failed');
+    console.log(`[VerboseMirror] ${elapsed}ms - ${statusText} route=${routeText}`);
     return result;
   } catch (error) {
     console.error("[VerboseMirror] Error:", error.message);
@@ -372,6 +631,16 @@ app.get('/health', (req, res) => {
       token_set: Boolean(OPENCLAW_HOOK_TOKEN),
       url_source: OPENCLAW_HOOK_URL_SOURCE,
       token_source: OPENCLAW_HOOK_TOKEN_SOURCE
+    },
+    discord: {
+      direct_delivery: DISCORD_DIRECT_DELIVERY,
+      token_set: Boolean(DISCORD_BOT_TOKEN),
+      token_source: DISCORD_BOT_TOKEN_SOURCE
+    },
+    direct_delivery_adapters: getDirectDeliveryStatus(),
+    telegram: {
+      token_set: Boolean(TELEGRAM_BOT_TOKEN),
+      token_source: TELEGRAM_BOT_TOKEN_SOURCE
     }
   });
 });
@@ -413,6 +682,16 @@ app.get('/copilot/status', (req, res) => {
       token_set: Boolean(OPENCLAW_HOOK_TOKEN),
       url_source: OPENCLAW_HOOK_URL_SOURCE,
       token_source: OPENCLAW_HOOK_TOKEN_SOURCE
+    },
+    discord: {
+      direct_delivery: DISCORD_DIRECT_DELIVERY,
+      token_set: Boolean(DISCORD_BOT_TOKEN),
+      token_source: DISCORD_BOT_TOKEN_SOURCE
+    },
+    direct_delivery_adapters: getDirectDeliveryStatus(),
+    telegram: {
+      token_set: Boolean(TELEGRAM_BOT_TOKEN),
+      token_source: TELEGRAM_BOT_TOKEN_SOURCE
     }
   });
 });
@@ -1245,48 +1524,52 @@ async function reactImmediate(message) {
 
 async function sendToOpenClaw(message, options = {}) {
   const sendStart = Date.now();
+  const routeTarget = resolveRouteTarget(options.routeTarget, options.botId);
+  const routeText = formatRouteText(routeTarget, 'wake');
+  const text = `[MEETING TRANSCRIPT]\n${message}`;
+  let direct = null;
   try {
+    direct = await tryDirectDelivery(routeTarget, text);
+    if (direct.delivered) {
+      const directResult = direct.result;
+      const elapsed = Date.now() - sendStart;
+      console.log(
+        `[FastInject] ${elapsed}ms - delivered_direct route=${routeText} chunks=${directResult.chunksSent}/${directResult.chunksTotal}`
+      );
+      return elapsed;
+    }
+    if (direct.reason === 'failed') {
+      console.warn(
+        `[FastInject] direct failed route=${routeText} error=${direct.result?.error || 'unknown'} fallback=openclaw`
+      );
+    }
+
     if (!OPENCLAW_HOOK_TOKEN) {
       console.error('[FastInject] OPENCLAW_HOOK_TOKEN is required.');
       return null;
     }
-    const routeTarget = resolveRouteTarget(options.routeTarget, options.botId);
-    const text = `[MEETING TRANSCRIPT]\n${message}`;
-    const headers = {
-      "Authorization": `Bearer ${OPENCLAW_HOOK_TOKEN}`,
-      "Content-Type": "application/json"
-    };
+
     let response;
     if (routeTarget?.channel && routeTarget?.to) {
-      response = await fetch(OPENCLAW_AGENT_HOOK_URL, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          message: text,
-          name: 'ClawPilot Copilot',
-          wakeMode: 'now',
-          deliver: true,
-          channel: routeTarget.channel,
-          to: routeTarget.to
-        })
-      });
+      const payload = {
+        message: text,
+        name: 'ClawPilot Copilot',
+        wakeMode: 'now',
+        deliver: true,
+        channel: routeTarget.channel,
+        to: routeTarget.to
+      };
+      ({ response } = await postToOpenClawJson(OPENCLAW_AGENT_HOOK_URL, payload));
     } else {
-      response = await fetch(OPENCLAW_HOOK_URL, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ text, mode: "now" })
-      });
+      ({ response } = await postToOpenClawJson(OPENCLAW_HOOK_URL, { text, mode: "now" }));
     }
-    const raw = await response.text();
-    let result;
-    try {
-      result = JSON.parse(raw);
-    } catch {
-      result = { ok: response.ok, raw };
-    }
+
     const elapsed = Date.now() - sendStart;
-    const routeText = routeTarget ? `${routeTarget.channel}:${routeTarget.to}` : 'wake';
-    console.log(`[FastInject] ${elapsed}ms - ${response.ok ? "success" : "failed"} route=${routeText}`);
+    const usedFallback = direct?.attempted || direct?.reason === 'not_configured';
+    const statusText = response.ok
+      ? (usedFallback ? 'fallback_openclaw' : 'success')
+      : (usedFallback ? 'failed_after_direct' : 'failed');
+    console.log(`[FastInject] ${elapsed}ms - ${statusText} route=${routeText}`);
     return elapsed;
   } catch (error) {
     console.error("[FastInject] Error:", error.message);
@@ -1467,6 +1750,6 @@ app.listen(PORT, HOST, () => {
   console.log(`[OpenClawHook] wake=${OPENCLAW_HOOK_URL} agent=${OPENCLAW_AGENT_HOOK_URL}`);
   console.log(`[OpenClawHook] token=${OPENCLAW_HOOK_TOKEN ? 'set' : 'missing'} url_source=${OPENCLAW_HOOK_URL_SOURCE} token_source=${OPENCLAW_HOOK_TOKEN_SOURCE}`);
   if (!OPENCLAW_HOOK_TOKEN) {
-    console.warn(`[OpenClawHook] token missing. Set OPENCLAW_HOOK_TOKEN or configure hooks.token in ${OPENCLAW_HOOK_DEFAULTS.configPath}`);
+    console.warn(`[OpenClawHook] token missing. Configure hooks.token in ${OPENCLAW_HOOK_DEFAULTS.configPath}`);
   }
 });

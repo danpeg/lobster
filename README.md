@@ -38,8 +38,18 @@ Required environment variables:
 2. `RECALL_API_BASE` (match your Recall workspace region)
 3. `WEBHOOK_SECRET`
 4. `WEBHOOK_BASE_URL`
-5. `OPENCLAW_HOOK_URL`
-6. `OPENCLAW_HOOK_TOKEN`
+
+OpenClaw integration values are loaded from `openclaw.json`:
+
+5. `hooks.*` (for `/hooks/wake` + token)
+6. `channels.discord.botToken` (for direct Discord delivery)
+7. If bridge runs as a different OS user, set `OPENCLAW_CONFIG_PATH` to the correct `openclaw.json`
+
+Optional bridge behavior:
+
+8. `DISCORD_DIRECT_DELIVERY` (default: `true`)
+
+Routing is channel-agnostic by default (via OpenClaw hooks). Discord direct delivery is an optional reliability adapter with fallback to OpenClaw hooks.
 
 ## Verify End-to-End
 
