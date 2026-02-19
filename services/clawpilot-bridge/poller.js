@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
  * Recall.ai Polling Client
- * Polls for transcript events and sends summary pings via OpenClaw
+ * Polls for transcript events and sends reactions to Dan via Telegram
  */
 
 const https = require('https');
 const { execSync } = require('child_process');
 
-const POLL_URL = process.env.RECALL_POLL_URL || '';
-const POLL_TOKEN = process.env.RECALL_POLL_TOKEN || '';
+const POLL_URL = process.env.RECALL_POLL_URL || "";
+const POLL_TOKEN = process.env.RECALL_POLL_TOKEN || "";
 const POLL_INTERVAL_MS = 3000; // Poll every 3 seconds
 
 let iterator = null;
@@ -17,10 +17,11 @@ let lastReactionTime = 0;
 const REACTION_COOLDOWN_MS = 20000; // React at most every 20 seconds
 const MIN_NEW_WORDS = 30;
 
+if (!POLL_URL || !POLL_TOKEN) {
+  throw new Error("Missing RECALL_POLL_URL or RECALL_POLL_TOKEN");
+}
+
 async function poll() {
-  if (!POLL_URL || !POLL_TOKEN) {
-    throw new Error('Missing RECALL_POLL_URL or RECALL_POLL_TOKEN');
-  }
   const url = iterator ? `${POLL_URL}?iterator=${encodeURIComponent(iterator)}` : POLL_URL;
   
   return new Promise((resolve, reject) => {

@@ -1,24 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENV_FILE="${SCRIPT_DIR}/.env"
-if [[ -f "$ENV_FILE" ]]; then
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-fi
+source /root/.recall-env
 
 RAW_INPUT="${*:-}"
 DRY_RUN="${DRY_RUN:-false}"
-RECALL_API_BASE="${RECALL_API_BASE:-https://eu-central-1.recall.ai}"
-RECALL_API_BASE="${RECALL_API_BASE%/}"
-RECALL_BOT_API="${RECALL_API_BASE}/api/v1/bot"
 RECALL_STT_MODE="${RECALL_STT_MODE:-prioritize_low_latency}"
 RECALL_LANGUAGE_CODE="${RECALL_LANGUAGE_CODE:-en}"
 REPLACE_ACTIVE_ON_DUPLICATE="${REPLACE_ACTIVE_ON_DUPLICATE:-true}"
 BOT_REPLACE_WAIT_TIMEOUT_SEC="${BOT_REPLACE_WAIT_TIMEOUT_SEC:-45}"
 BOT_REPLACE_POLL_SEC="${BOT_REPLACE_POLL_SEC:-2}"
-BOT_NAME="${BOT_NAME:-}"
 
 extract_meeting_url() {
   printf '%s\n' "$1" | grep -Eo 'https?://[^[:space:]<>"'"'"']+' | grep -E 'meet\.google\.com|([a-z0-9-]+\.)?zoom\.us|teams\.microsoft\.com|teams\.live\.com' | head -n 1
@@ -46,28 +37,6 @@ is_truthy() {
   [[ "$v" == "1" || "$v" == "true" || "$v" == "yes" || "$v" == "y" ]]
 }
 
-sanitize_bot_name() {
-  printf '%s' "$1" | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//'
-}
-
-resolve_bot_name() {
-  local explicit="${BOT_NAME:-${RECALL_BOT_NAME:-}}"
-  explicit="$(sanitize_bot_name "$explicit")"
-  if [[ -n "$explicit" ]]; then
-    printf '%.80s' "$explicit"
-    return 0
-  fi
-
-  local agent_name="${OPENCLAW_AGENT_NAME:-${CLAW_AGENT_NAME:-${AGENT_NAME:-OpenClaw}}}"
-  local suffix="${RECALL_BOT_NAME_SUFFIX:-Note Taker}"
-  local combined
-  combined="$(sanitize_bot_name "${agent_name} ${suffix}")"
-  if [[ -z "$combined" ]]; then
-    combined="OpenClaw Note Taker"
-  fi
-  printf '%.80s' "$combined"
-}
-
 is_terminal_status() {
   case "$1" in
     done|fatal|call_ended) return 0 ;;
@@ -77,7 +46,7 @@ is_terminal_status() {
 
 get_bot_status_code() {
   local bot_id="$1"
-  curl -fsS "${RECALL_BOT_API}/${bot_id}" \
+  curl -fsS "https://eu-central-1.recall.ai/api/v1/bot/${bot_id}" \
     -H "Authorization: Token ${RECALL_API_KEY}" \
     | jq -r '.status_changes[-1].code // "unknown"' 2>/dev/null || echo "unknown"
 }
@@ -85,7 +54,7 @@ get_bot_status_code() {
 remove_bot_from_call() {
   local bot_id="$1"
   local raw http body err_code
-  raw="$(curl -sS -w '\n%{http_code}' -X POST "${RECALL_BOT_API}/${bot_id}/leave_call/" \
+  raw="$(curl -sS -w '\n%{http_code}' -X POST "https://eu-central-1.recall.ai/api/v1/bot/${bot_id}/leave_call/" \
     -H "Authorization: Token ${RECALL_API_KEY}" \
     -H "Content-Type: application/json" || true)"
   http="${raw##*$'\n'}"
@@ -135,12 +104,12 @@ if [[ -z "$MEETING_URL" ]]; then
 fi
 
 if [[ -z "${RECALL_API_KEY:-}" ]]; then
-  echo "Error: RECALL_API_KEY is not set (export it or define it in ${ENV_FILE})"
+  echo "Error: RECALL_API_KEY missing in /root/.recall-env"
   exit 1
 fi
 
 if [[ -z "${WEBHOOK_SECRET:-}" ]]; then
-  echo "Error: WEBHOOK_SECRET is not set (export it or define it in ${ENV_FILE})"
+  echo "Error: WEBHOOK_SECRET missing in /root/.recall-env"
   exit 1
 fi
 
@@ -159,13 +128,12 @@ if [[ -z "$WEBHOOK_BASE_URL" ]]; then
 fi
 
 WEBHOOK_URL="${WEBHOOK_BASE_URL%/}/webhook?token=${WEBHOOK_SECRET}"
-BOT_NAME_RESOLVED="$(resolve_bot_name)"
 read -r MEETING_PLATFORM MEETING_ID <<<"$(parse_meeting_target "$MEETING_URL")"
 replaced_bot_id=''
 
 if [[ "$MEETING_PLATFORM" != "unknown" && -n "$MEETING_ID" ]]; then
   active_bot_json=''
-  if list_json="$(curl -fsS "${RECALL_BOT_API}/?page_size=100" \
+  if list_json="$(curl -fsS "https://eu-central-1.recall.ai/api/v1/bot/?page_size=100" \
     -H "Authorization: Token ${RECALL_API_KEY}" 2>/dev/null)"; then
     active_bot_json="$(printf '%s' "$list_json" | jq -c \
       --arg platform "$MEETING_PLATFORM" \
@@ -208,15 +176,26 @@ if [[ "$MEETING_PLATFORM" != "unknown" && -n "$MEETING_ID" ]]; then
   fi
 fi
 
+# Silent MP3 (0.1s) for enabling audio output capability
+SILENT_MP3_B64="SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjYwLjE2LjEwMAAAAAAAAAAAAAAA//tAwAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAAFAAACvgBoaGhoaGhoaGhoaGhoaGhoaGhojo6Ojo6Ojo6Ojo6Ojo6Ojo6Ojo60tLS0tLS0tLS0tLS0tLS0tLS0tNra2tra2tra2tra2tra2tra2tra//////////////////////////8AAAAATGF2YzYwLjMxAAAAAAAAAAAAAAAAJAMGAAAAAAAAAr4QurGFAAAAAAD/+xDEAAPAAAGkAAAAIAAANIAAAARMQU1FMy4xMDBVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVf/7EMQpg8AAAaQAAAAgAAA0gAAABFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//sQxFMDwAABpAAAACAAADSAAAAEVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVX/+xDEfIPAAAGkAAAAIAAANIAAAARVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVf/7EMSmA8AAAaQAAAAgAAA0gAAABFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV"
+
 payload="$(jq -nc \
   --arg meeting_url "$MEETING_URL" \
   --arg webhook_url "$WEBHOOK_URL" \
-  --arg bot_name "$BOT_NAME_RESOLVED" \
   --arg recall_stt_mode "$RECALL_STT_MODE" \
   --arg recall_language_code "$RECALL_LANGUAGE_CODE" \
+  --arg silent_mp3 "$SILENT_MP3_B64" \
   '{
     meeting_url: $meeting_url,
-    bot_name: $bot_name,
+    bot_name: "Fugu 🐡",
+    automatic_audio_output: {
+      in_call_recording: {
+        data: {
+          kind: "mp3",
+          b64_data: $silent_mp3
+        }
+      }
+    },
     recording_config: {
       transcript: {
         provider: {
@@ -242,7 +221,7 @@ if [[ "$DRY_RUN" == "true" ]]; then
   exit 0
 fi
 
-response="$(curl -sS -X POST "${RECALL_BOT_API}" \
+response="$(curl -sS -X POST "https://eu-central-1.recall.ai/api/v1/bot" \
   -H "Authorization: Token ${RECALL_API_KEY}" \
   -H "Content-Type: application/json" \
   -d "$payload")"
