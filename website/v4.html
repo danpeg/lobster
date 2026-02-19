@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lobster v2</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nobile:ital,wght@0,400;0,500;0,700;1,400;1,500;1,700&display=swap" rel="stylesheet">
+  <style>
+    @font-face {
+      font-family: 'Nohemi';
+      src: url('fonts/Nohemi/Web-TT/Nohemi-SemiBold.woff2') format('woff2'),
+           url('fonts/Nohemi/Web-TT/Nohemi-SemiBold.woff') format('woff');
+      font-weight: 600;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: 'Nohemi';
+      src: url('fonts/Nohemi/Web-TT/Nohemi-Light.woff2') format('woff2'),
+           url('fonts/Nohemi/Web-TT/Nohemi-Light.woff') format('woff');
+      font-weight: 300;
+      font-style: normal;
+    }
+  </style>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      font-family: 'Nobile', sans-serif;
+      background: #fff;
+      color: #1D5578;
+      overscroll-behavior: none;
+    }
+    
+    /* Typography */
+    h1, h2 {
+      font-family: 'Nohemi', sans-serif;
+      font-weight: 600;
+      font-size: 48px;
+      color: #1D5578;
+      margin-bottom: 20px;
+    }
+    p {
+      font-family: 'Nobile', sans-serif;
+      font-size: 16px;
+      line-height: 1.6;
+      color: #1D5578;
+    }
+    
+    /* Hero */
+    .hero {
+      position: relative;
+      width: 100%;
+      min-height: 100vh;
+      background-color: #1C5478;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      padding: 60px 40px;
+    }
+    .hero-bg {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: url('bg-blue.png') center center / cover no-repeat;
+      opacity: 0;
+    }
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 60px;
+      max-width: 1200px;
+      align-items: center;
+    }
+    .hero-lobster {
+      display: flex;
+      justify-content: center;
+      visibility: hidden;
+    }
+    .hero-lobster img {
+      height: 270px;
+      width: auto;
+    }
+    .hero-content {
+      color: #fff;
+    }
+    .hero-title {
+      font-family: 'Nohemi', sans-serif;
+      font-weight: 600;
+      font-size: 106px;
+      line-height: 0.85;
+      color: #fff;
+      margin-bottom: 30px;
+      text-transform: uppercase;
+    }
+    .hero-body {
+      font-family: 'Nobile', sans-serif;
+      font-size: 18px;
+      line-height: 1.6;
+      color: #fff;
+      max-width: 420px;
+    }
+    .hero-content {
+      visibility: hidden;
+    }
+    .hero-body .line {
+      margin: 0;
+      color: #fff;
+    }
+    
+    /* Fix hero visibility after load */
+    .hero-content.visible,
+    .hero-lobster.visible {
+      visibility: visible;
+      opacity: 1;
+    }
+    .scroll-arrow {
+      position: absolute;
+      bottom: 40px;
+      left: 50%;
+      transform: translateX(-50%);
+      animation: bounce 2s infinite;
+    }
+    @keyframes bounce {
+      0%, 20%, 50%, 80%, 100% { transform: translateX(-50%) translateY(0); }
+      40% { transform: translateX(-50%) translateY(10px); }
+      60% { transform: translateX(-50%) translateY(5px); }
+    }
+    
+    /* Intro Section */
+    .intro {
+      position: relative;
+      z-index: 10;
+      background: #fff;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      min-height: 500px;
+      border: none;
+      margin-top: 0;
+    }
+    .intro-grid {
+      display: contents;
+    }
+    .intro-text {
+      padding: 80px 60px 80px 80px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: flex-start;
+    }
+    .intro-text h1 {
+      color: #000;
+      margin-bottom: 24px;
+    }
+    .intro-text p {
+      color: #333;
+      margin-bottom: 0;
+      max-width: 420px;
+    }
+    .intro-img {
+      position: relative;
+      overflow: hidden;
+      padding: 5%;
+    }
+    .intro-img img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      border-radius: 0;
+    }
+    .btn-red {
+      display: inline-block;
+      background: #E63900;
+      color: #fff;
+      padding: 16px 32px;
+      border-radius: 8px;
+      font-weight: 600;
+      text-decoration: none;
+      font-family: 'Nobile', sans-serif;
+      font-size: 16px;
+    }
+    .btn-red:hover { background: #cc3300; }
+    .btn-black {
+      display: inline-block;
+      background: #000;
+      color: #fff;
+      padding: 16px 32px;
+      border-radius: 0;
+      font-weight: 600;
+      text-decoration: none;
+      font-family: 'Nobile', sans-serif;
+      font-size: 16px;
+      margin-top: 24px;
+      width: auto;
+    }
+    .btn-black:hover { background: #333; }
+    .btn-white {
+      display: inline-block;
+      background: #fff;
+      color: #000;
+      padding: 16px 32px;
+      border-radius: 0;
+      font-weight: 600;
+      text-decoration: none;
+      font-family: 'Nobile', sans-serif;
+      font-size: 16px;
+    }
+    .btn-white:hover { background: #f0f0f0; }
+    
+    /* Horizontal Scroll Section */
+    .horizontal-section {
+      overflow: hidden;
+      background: #fff;
+      display: flex;
+      align-items: center;
+      min-height: 100vh;
+      position: relative;
+      z-index: 5;
+    }
+    .horizontal-wrapper {
+      display: flex;
+      gap: 80px;
+      background: #fff;
+    }
+    .panel {
+      width: 80vw;
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 40px;
+      flex-shrink: 0;
+      background: #fff;
+      align-items: start;
+      padding: 0 60px;
+    }
+    .panel-img {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      aspect-ratio: 4/3;
+      width: 100%;
+      max-width: 450px;
+    }
+    .panel-img img {
+      width: 115%;
+      height: 115%;
+      object-fit: cover;
+      border-radius: 0;
+    }
+    .panel-content {
+      padding-top: 0;
+    }
+    .panel-number {
+      font-family: 'Nohemi', sans-serif;
+      font-weight: 300;
+      font-size: 48px;
+      color: #cc0000;
+      margin-bottom: 8px;
+      line-height: 1;
+    }
+    .panel-text h2 {
+      color: #000;
+      font-size: 48px;
+      margin-bottom: 20px;
+    }
+    .panel-text p {
+      color: #333;
+      max-width: 400px;
+    }
+    .panel:last-child {
+      width: 100vw;
+    }
+    
+    /* Vibe Section */
+    .vibe {
+      position: relative;
+      padding: 80px 40px;
+      background: #fff;
+      z-index: 5;
+      border: none;
+      outline: none;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .vibe-img {
+      width: 100%;
+      max-width: 1200px;
+      border-radius: 6px;
+    }
+    .vibe-caption {
+      font-family: 'Nobile', sans-serif;
+      font-size: 12px;
+      color: #999;
+      margin-top: 16px;
+      font-style: italic;
+      text-align: center;
+    }
+    
+    /* Footer CTA */
+    .footer-cta {
+      background: #000;
+      padding: 60px 40px 40px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .footer-credit {
+      color: #fff;
+      font-family: 'Nobile', sans-serif;
+      font-size: 11px;
+      text-align: center;
+      margin-top: 60px;
+    }
+    .footer-credit a {
+      color: #fff;
+      text-decoration: underline;
+    }
+    .footer-grid {
+      display: flex;
+      align-items: center;
+      gap: 60px;
+      max-width: 1200px;
+    }
+    .gif-circle {
+      width: 200px;
+      height: 200px;
+      border-radius: 50%;
+      overflow: hidden;
+      border: 2px solid #ffffff;
+      flex-shrink: 0;
+    }
+    .gif-circle img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .footer-text {
+      display: flex;
+      align-items: center;
+      gap: 40px;
+    }
+    .footer-text h2 {
+      color: #ffffff;
+      margin-bottom: 0;
+      white-space: nowrap;
+    }
+    .btn-claw {
+      display: inline-block;
+      background: #E63900;
+      color: #fff;
+      padding: 16px 32px;
+      border-radius: 8px;
+      font-weight: 600;
+      text-decoration: none;
+      font-family: 'Nobile', sans-serif;
+      font-size: 16px;
+      white-space: nowrap;
+    }
+    .btn-claw:hover { background: #cc3300; }
+    
+    @media (max-width: 768px) {
+      /* Hero mobile - Lobster overlapping on top of title */
+      .hero { 
+        padding: 60px 20px 40px;
+        min-height: 100vh;
+      }
+      .hero-grid { 
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        width: 100%;
+        position: relative;
+      }
+      .hero-content {
+        display: contents;
+      }
+      .hero-title { 
+        font-size: 72px;
+        margin-bottom: 0;
+        order: 1;
+        position: relative;
+        z-index: 1;
+      }
+      .hero-lobster { 
+        order: 2;
+        margin-top: -140px;
+        margin-bottom: 30px;
+        z-index: 10;
+        position: relative;
+      }
+      .hero-lobster img { height: 200px; }
+      .hero-body { 
+        order: 3;
+        max-width: 380px;
+        padding: 0 10px;
+      }
+      .hero-body .line { 
+        font-size: 17px;
+        display: block;
+        margin-bottom: 20px;
+        line-height: 1.5;
+      }
+      
+      /* Mobile hero - visible after animation, no fade out */
+      .hero-bg {
+        opacity: 1 !important;
+      }
+      
+      /* Intro mobile - text first, then image */
+      .intro { 
+        grid-template-columns: 1fr;
+        display: flex;
+        flex-direction: column;
+      }
+      .intro-text {
+        order: 1;
+        padding: 40px 20px;
+      }
+      .intro-img {
+        order: 2;
+        padding: 0;
+      }
+      .intro-text h1 { font-size: 32px; }
+      .intro-text p { font-size: 14px; }
+      
+      /* Horizontal scroll disable on mobile - stack vertically */
+      .horizontal-section {
+        min-height: auto;
+        display: block;
+        width: 100vw;
+        background: #fff;
+        margin-top: 0;
+        padding-top: 0;
+      }
+      .horizontal-wrapper {
+        flex-direction: column;
+        gap: 60px;
+        padding: 40px 0;
+        width: 100vw;
+        transform: none !important;
+        background: #fff;
+      }
+      .panel {
+        width: 100vw;
+        grid-template-columns: 1fr;
+        gap: 20px;
+        padding: 0 2.5%;
+      }
+      .panel-img {
+        width: 95%;
+        max-width: 95%;
+        margin: 0 auto;
+        aspect-ratio: 4/3;
+      }
+      .panel-content {
+        width: 95%;
+        margin: 0 auto;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 0;
+      }
+      /* Number + title on one line */
+      .panel-number { 
+        font-size: 28px;
+        margin-right: 12px;
+        margin-bottom: 0;
+      }
+      .panel-text {
+        flex: 1;
+        min-width: 0;
+      }
+      .panel-text h2 { 
+        font-size: 28px;
+        margin-bottom: 12px;
+      }
+      .panel-text p {
+        margin-top: 0;
+      }
+      .panel-text p { font-size: 14px; }
+      
+      /* Footer mobile */
+      .footer-grid { flex-direction: column; text-align: center; gap: 20px; }
+      .footer-text { flex-direction: column; gap: 20px; }
+      .footer-text h2 { font-size: 28px; }
+      
+      /* Full width containers, 95% content inside */
+      .hero { width: 100vw; }
+      .hero-grid { width: 95%; margin: 0 auto; }
+      .intro { width: 100vw; }
+      .intro-text { width: 95%; margin: 0 auto; padding: 40px 0; }
+      .intro-img { width: 95%; margin: 0 auto; }
+      .vibe { width: 100vw; padding: 40px 2.5%; }
+      .footer-cta { width: 100vw; }
+      
+      /* Remove zoom on images */
+      .panel-img img {
+        transform: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="hero-bg"></div>
+    <div class="hero-grid">
+      <div class="hero-lobster">
+        <img src="lobster-hero.png" alt="Lobster">
+      </div>
+      <div class="hero-content">
+        <h1 class="hero-title">MEET<br><span class="underline">LOBSTER</span></h1>
+        <div class="hero-body">
+          <p class="line">Are you still looking at meeting AFTER they happened?</p>
+          <p class="line">wake up, grandpa, it's 2026. The first (and only) openclaw meeting agent, takes actions <strong>live</strong> in meetings, takes notes, fetches details and actively participates.</p>
+        </div>
+      </div>
+    </div>
+    <div class="scroll-arrow">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2">
+        <polyline points="6,9 12,15 18,9"></polyline>
+      </svg>
+    </div>
+  </section>
+
+  <!-- Intro -->
+  <section class="intro">
+    <div class="intro-grid">
+      <div class="intro-text">
+        <h1>He's surprisingly<br>good at this.</h1>
+        <p>You already have an OpenClaw agent. It knows your work, your preferences, your context. Now it can join your meetings. Not as a passive recorder. As a real participant that responds, researches, and takes action while you're still talking.</p>
+        <a href="#" class="btn-black">Get Started</a>
+      </div>
+      <div class="intro-img">
+        <img src="surprisingly-good.png" alt="Lobster in meeting">
+      </div>
+    </div>
+  </section>
+
+  <!-- Horizontal Scroll Features -->
+  <section class="horizontal-section">
+    <div class="horizontal-wrapper">
+      
+      <!-- Panel 1 -->
+      <div class="panel">
+        <div class="panel-img">
+          <img src="shows-up.png" alt="Lobster in a meeting">
+        </div>
+        <div class="panel-content">
+          <span class="panel-number">01</span>
+          <div class="panel-text">
+            <h2>He Shows Up</h2>
+            <p>Other tools send a stranger to record your meetings. Lobster brings your own agent. The one that already knows your projects, your clients, your way of working.</p>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Panel 2 -->
+      <div class="panel">
+        <div class="panel-img">
+          <img src="all-ears.png" alt="Lobster listening">
+        </div>
+        <div class="panel-content">
+          <span class="panel-number">02</span>
+          <div class="panel-text">
+            <h2>He's All Ears</h2>
+            <p>Well, antennae. Hears everything in real-time. The decisions, the half-commitments, the thing someone mentioned that'll matter in two weeks. Not after. While it happens.</p>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Panel 3 -->
+      <div class="panel">
+        <div class="panel-img">
+          <img src="efficient.png" alt="Lobster working">
+        </div>
+        <div class="panel-content">
+          <span class="panel-number">03</span>
+          <div class="panel-text">
+            <h2>Surprisingly Efficient</h2>
+            <p>Researches, drafts, creates tasks while you talk. Not after the meeting. During it.</p>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Panel 4 -->
+      <div class="panel">
+        <div class="panel-img">
+          <img src="remembers.png" alt="Lobster conspiracy board">
+        </div>
+        <div class="panel-content">
+          <span class="panel-number">04</span>
+          <div class="panel-text">
+            <h2>He Connects the Dots</h2>
+            <p>Your OpenClaw agent already has your full context. Now it has meeting context too. Every conversation, every decision, connected to everything else it knows about your work.</p>
+          </div>
+        </div>
+      </div>
+      
+    </div>
+  </section>
+
+  <!-- Vibe -->
+  <section class="vibe">
+    <img src="vibe-shrimp.png" alt="" class="vibe-img">
+    <p class="vibe-caption">"... and then she said: 'I want the shrimp cocktail', I mean, read the room, Madison!"</p>
+  </section>
+
+  <!-- Footer CTA -->
+  <footer class="footer-cta">
+    <div class="footer-grid">
+      <div class="gif-circle">
+        <img src="lobster-spin.gif" alt="Lobster spinning">
+      </div>
+      <div class="footer-text">
+        <h2>Get Your Own Lobster</h2>
+        <a href="#" class="btn-white">Get Started</a>
+      </div>
+    </div>
+    <div class="footer-credit">
+      Site and imagery by Kitt from <a href="https://curiousendeavor.com" target="_blank">Curious Endeavor</a>. 🦊
+    </div>
+  </footer>
+
+  <!-- GSAP + ScrollTrigger -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+  <script>
+    gsap.registerPlugin(ScrollTrigger);
+    
+    // Hero animation on load - preload bg image first
+    const bgImg = new Image();
+    bgImg.src = 'bg-blue.png';
+    bgImg.onload = () => {
+      const heroTl = gsap.timeline();
+      
+      // Fade in background image
+      heroTl.to('.hero-bg', {
+        opacity: 1,
+        duration: 0.6,
+        ease: "power2.out"
+      });
+      
+      // Fade in lobster
+      heroTl.fromTo('.hero-lobster', 
+        { opacity: 0, visibility: 'visible' },
+        { opacity: 1, duration: 0.5, ease: "power2.out" },
+        "-=0.3"
+      );
+      
+      // Fade in content container with title
+      heroTl.fromTo('.hero-content', 
+        { opacity: 0, visibility: 'visible' },
+        { opacity: 1, duration: 0.5, ease: "power2.out" },
+        "-=0.3"
+      );
+      
+      // Lines fade in one by one
+      heroTl.fromTo('.hero-body .line',
+        { opacity: 0 },
+        { opacity: 1, duration: 0.35, stagger: 0.12, ease: "power2.out" },
+        "-=0.2"
+      );
+    };
+    
+    // Scroll effects - different for mobile vs desktop
+    const isMobile = window.innerWidth <= 768;
+    
+    if (isMobile) {
+      // Mobile: parallax only, no fade out
+      gsap.to('.hero-grid', {
+        y: -100,
+        ease: "none",
+        scrollTrigger: {
+          trigger: '.hero',
+          start: "top top",
+          end: "bottom top",
+          scrub: 1
+        }
+      });
+    } else {
+    
+    // Horizontal scroll (desktop only)
+    const horizontalSection = document.querySelector('.horizontal-section');
+    const horizontalWrapper = document.querySelector('.horizontal-wrapper');
+    
+    if (window.innerWidth > 768) {
+      const hScrollTrigger = gsap.to(horizontalWrapper, {
+        x: () => -(horizontalWrapper.scrollWidth - window.innerWidth),
+        ease: "none",
+        scrollTrigger: {
+          trigger: horizontalSection,
+          start: "top top",
+          end: () => "+=" + (horizontalWrapper.scrollWidth - window.innerWidth),
+          pin: true,
+          scrub: 1,
+          invalidateOnRefresh: true
+        }
+      });
+    }
+    
+    // Images grow 20% as they scroll across screen (desktop only)
+    if (window.innerWidth > 768) {
+      gsap.utils.toArray('.panel-img img').forEach((img, i) => {
+        gsap.fromTo(img, 
+          { scale: 1 },
+          {
+            scale: 1.2,
+            ease: "none",
+            scrollTrigger: {
+              trigger: horizontalSection,
+              start: "top top",
+              end: () => "+=" + (horizontalWrapper.scrollWidth - window.innerWidth),
+              scrub: 1
+            }
+          }
+        );
+      });
+    }
+    
+    // Intro section animations
+    gsap.from('.intro-img', {
+      x: -100,
+      opacity: 0,
+      duration: 1,
+      ease: "power3.out",
+      scrollTrigger: {
+        trigger: '.intro',
+        start: "top 70%",
+      }
+    });
+    
+    gsap.from('.intro-text h1', {
+      y: 50,
+      opacity: 0,
+      duration: 0.8,
+      ease: "power3.out",
+      scrollTrigger: {
+        trigger: '.intro',
+        start: "top 70%",
+      }
+    });
+    
+    gsap.from('.intro-text p', {
+      y: 30,
+      opacity: 0,
+      duration: 0.8,
+      delay: 0.2,
+      ease: "power3.out",
+      scrollTrigger: {
+        trigger: '.intro',
+        start: "top 70%",
+      }
+    });
+    
+    gsap.from('.intro-text .btn-red', {
+      y: 20,
+      opacity: 0,
+      duration: 0.6,
+      delay: 0.4,
+      ease: "power3.out",
+      scrollTrigger: {
+        trigger: '.intro',
+        start: "top 70%",
+      }
+    });
+    
+    // Hero content fades out and parallax up - FAST
+    gsap.fromTo('.hero-content', 
+      { opacity: 1, y: 0 },
+      {
+        opacity: 0,
+        y: -400,
+        ease: "none",
+        scrollTrigger: {
+          trigger: '.hero',
+          start: "top top",
+          end: "40% top",
+          scrub: 0.5
+        }
+      }
+    );
+    
+    // Lobster parallax up and fade out - same as content - FAST
+    gsap.fromTo('.hero-lobster', 
+      { y: 0, opacity: 1 },
+      {
+        y: -400,
+        opacity: 0,
+        ease: "none",
+        scrollTrigger: {
+          trigger: '.hero',
+          start: "top top",
+          end: "40% top",
+          scrub: 0.5
+        }
+      }
+    );
+    
+    // Pin hero so white section scrolls over it
+    ScrollTrigger.create({
+      trigger: '.hero',
+      start: "top top",
+      end: "bottom top",
+      pin: true,
+      pinSpacing: false
+    });
+    } // end desktop only
+  </script>
+
+</body>
+</html>

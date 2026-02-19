@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lobster</title>
+  <link rel="stylesheet" href="https://use.typekit.net/plu8vxg.css">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f5f5f5;
+      color: #333;
+      overflow-x: hidden;
+    }
+
+    /* Hero Header */
+    .hero-header {
+      position: relative;
+      width: 100%;
+      height: 650px;
+      background: url('bg-blue.png') center center / cover no-repeat;
+      overflow: hidden;
+    }
+
+    .hero-text {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-family: "new-spirit", serif;
+      font-weight: 700;
+      font-size: 8vw;
+      color: #ffffff;
+      text-transform: uppercase;
+      z-index: 1;
+      width: 85vw;
+      text-align: center;
+      line-height: 0.9;
+      white-space: nowrap;
+      will-change: transform;
+    }
+
+    .hero-lobster {
+      position: absolute;
+      bottom: 40px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 2;
+    }
+
+    .hero-lobster img {
+      height: 350px;
+      width: auto;
+    }
+
+    /* 6-Column Grid */
+    .grid-6 {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 25px;
+      width: 100%;
+      max-width: 1200px;
+      padding: 0 40px;
+    }
+    .col-1 { grid-column: span 1; }
+    .col-2 { grid-column: span 2; }
+    .col-3 { grid-column: span 3; }
+    .col-4 { grid-column: span 4; }
+    .col-5 { grid-column: span 5; }
+    .col-6 { grid-column: span 6; }
+    
+    .text-col {
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      align-items: flex-start;
+    }
+    .form-col {
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+    }
+    .img-col {
+      display: flex;
+      align-items: flex-start;
+    }
+    .section-img {
+      width: 100%;
+      height: auto;
+      border-radius: 6px;
+    }
+    .flip-h {
+      transform: scaleX(-1);
+    }
+    .placeholder {
+      width: 100%;
+      aspect-ratio: 1;
+      background: #e0e0e0;
+      border: 3px dashed #999;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      color: #666;
+      text-align: center;
+      padding: 20px;
+    }
+
+    /* Sections */
+    .section {
+      min-height: auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 40px;
+    }
+    .grid-section {
+      min-height: auto;
+      padding: 40px 0;
+    }
+    .section { background: #fff; }
+    
+    /* Removed old flex layout - using grid-6 throughout */
+    .label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: #999;
+      margin-bottom: 10px;
+    }
+    h1, h2 {
+      font-family: "new-spirit", serif;
+      font-weight: 400;
+      color: #1D5578;
+    }
+    h1, h2 {
+      font-size: 48px;
+      margin-bottom: 20px;
+    }
+    p, p.desc {
+      font-family: 'Inter', -apple-system, sans-serif;
+      font-size: 16px;
+      font-weight: 400;
+      line-height: 1.6;
+      color: #1D5578;
+      margin-bottom: 16px;
+    }
+    .cta-box {
+      background: #e8e8e8;
+      border: 2px dashed #999;
+      padding: 24px 30px;
+      border-radius: 12px;
+      text-align: center;
+    }
+    .cta-box .btn {
+      display: inline-block;
+      background: #333;
+      color: #fff;
+      padding: 14px 28px;
+      border-radius: 8px;
+      font-weight: 600;
+      margin-top: 12px;
+    }
+    .btn-red {
+      display: inline-block;
+      background: #E63900;
+      color: #fff;
+      padding: 14px 28px;
+      border-radius: 8px;
+      font-weight: 600;
+      text-decoration: none;
+      font-family: 'Inter', sans-serif;
+      font-size: 16px;
+    }
+    .btn-red:hover {
+      background: #cc3300;
+    }
+    
+    /* Vibe Section */
+    .vibe-section {
+      width: 100%;
+      background: #fff;
+      text-align: center;
+      padding: 20px 40px 40px;
+    }
+    .vibe-img {
+      width: 100%;
+      max-width: 1200px;
+      height: auto;
+      border-radius: 6px;
+    }
+    .vibe-caption {
+      font-family: 'Inter', sans-serif;
+      font-size: 12px;
+      color: #999;
+      margin-top: 12px;
+      font-style: italic;
+    }
+    .tagline {
+      font-size: 14px;
+      color: #888;
+      margin-top: 30px;
+      font-style: italic;
+    }
+    
+    /* Footer CTA */
+    .footer-cta {
+      background: url('bg-blue.png') center center / cover no-repeat;
+      padding: 60px 0;
+      display: flex;
+      justify-content: center;
+    }
+    .footer-gif-col {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+    }
+    .gif-circle {
+      width: 180px;
+      height: 180px;
+      border-radius: 50%;
+      overflow: hidden;
+      background: #1D5578;
+      border: 2px solid #ffffff;
+    }
+    .gif-circle img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .footer-text-col {
+      display: flex;
+      flex-direction: row;
+      justify-content: flex-start;
+      align-items: center;
+      gap: 30px;
+    }
+    .footer-text-col h2 {
+      color: #ffffff;
+      margin-bottom: 0;
+    }
+    .btn-claw {
+      display: inline-block;
+      background: #E63900;
+      color: #fff;
+      padding: 16px 32px;
+      border-radius: 8px;
+      font-weight: 600;
+      text-decoration: none;
+      font-family: 'Inter', sans-serif;
+      font-size: 16px;
+    }
+    .btn-claw:hover {
+      background: #cc3300;
+    }
+    @media (max-width: 768px) {
+      .hero-header { height: 450px; }
+      .hero-text { 
+        font-size: 7vw;
+      }
+      .hero-lobster img { height: 160px; }
+      .grid-6 {
+        grid-template-columns: 1fr;
+        padding: 0 20px;
+      }
+      .col-2, .col-3, .col-4, .col-5 { grid-column: span 1; }
+      .content, .content.reverse { flex-direction: column; }
+      .visual { max-width: 280px; }
+      h1 { font-size: 36px; }
+      h2 { font-size: 28px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Hero Header -->
+  <header class="hero-header">
+    <div class="hero-text">meet lobster</div>
+    <div class="hero-lobster">
+      <img src="lobster-hero.png" alt="Lobster">
+    </div>
+  </header>
+
+  <!-- Section 1: Intro + CTA (6-column grid) -->
+  <section class="section grid-section">
+    <div class="grid-6">
+      <div class="col-3 img-col">
+        <img src="surprisingly-good.png" alt="Lobster in meeting" class="section-img">
+      </div>
+      <div class="col-3 text-col">
+        <h1>He's surprisingly good at this.</h1>
+        <p>You already have an OpenClaw agent. It knows your work, your preferences, your context. Now it can join your meetings. Not as a passive recorder. As a real participant that responds, researches, and takes action while you're still talking.</p>
+        <a href="#" class="btn-red">Get Started</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 2: He Shows Up -->
+  <section class="section grid-section">
+    <div class="grid-6">
+      <div class="col-3 text-col">
+        <h2>He Shows Up</h2>
+        <p>Other tools send a stranger to record your meetings. Lobster brings your own agent. The one that already knows your projects, your clients, your way of working.</p>
+      </div>
+      <div class="col-3 img-col">
+        <img src="shows-up.png" alt="Lobster in a meeting" class="section-img">
+      </div>
+    </div>
+  </section>
+
+  <!-- Vibe Image -->
+  <section class="vibe-section">
+    <img src="vibe-shrimp.png" alt="" class="vibe-img">
+    <p class="vibe-caption">"... and then she said: 'I want the shrimp cocktail', I mean, read the room, Madison!"</p>
+  </section>
+
+  <!-- Section 3: He Listens -->
+  <section class="section grid-section">
+    <div class="grid-6">
+      <div class="col-3 text-col">
+        <h2>He's All Ears</h2>
+        <p>Well, antennae. Hears everything in real-time. The decisions, the half-commitments, the thing someone mentioned that'll matter in two weeks. Not after. While it happens.</p>
+      </div>
+      <div class="col-3 img-col">
+        <img src="all-ears.png" alt="Lobster listening with notepad" class="section-img">
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 4: He Acts -->
+  <section class="section grid-section">
+    <div class="grid-6">
+      <div class="col-3 img-col">
+        <img src="efficient.png" alt="Lobster working with charts" class="section-img">
+      </div>
+      <div class="col-3 text-col">
+        <h2>Surprisingly Efficient</h2>
+        <p>Researches, drafts, creates tasks while you talk. Not after the meeting. During it.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 5: He Remembers -->
+  <section class="section grid-section">
+    <div class="grid-6">
+      <div class="col-3 text-col">
+        <h2>He Connects the Dots</h2>
+        <p>Your OpenClaw agent already has your full context. Now it has meeting context too. Every conversation, every decision, connected to everything else it knows about your work.</p>
+      </div>
+      <div class="col-3 img-col">
+        <img src="remembers.png" alt="Lobster with conspiracy board" class="section-img">
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer CTA -->
+  <footer class="footer-cta">
+    <div class="grid-6">
+      <div class="col-2 footer-gif-col">
+        <div class="gif-circle">
+          <img src="lobster-spin.gif" alt="Lobster spinning">
+        </div>
+      </div>
+      <div class="col-4 footer-text-col">
+        <h2>Get Your Own Lobster</h2>
+        <a href="#" class="btn-claw">Ready when you are</a>
+      </div>
+    </div>
+  </footer>
+
+
+  <!-- Parallax Script -->
+  <script>
+    const heroText = document.querySelector('.hero-text');
+    const heroLobster = document.querySelector('.hero-lobster');
+
+    window.addEventListener('scroll', () => {
+      const scrollY = window.scrollY;
+      heroLobster.style.transform = `translateX(-50%) translateY(-${scrollY * 0.5}px)`;
+      heroText.style.transform = `translate(-50%, -50%) translateY(${scrollY * 0.1}px)`;
+    });
+  </script>
+
+</body>
+</html>
