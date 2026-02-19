@@ -70,6 +70,19 @@ Migration note:
 - `DISCORD_DIRECT_DELIVERY` controls direct-first mode (default: `true`)
 - Discord direct delivery is an adapter; if it fails, bridge falls back to OpenClaw hook delivery
 
+## Routed Copilot Delivery (All Channels)
+
+- `OPENCLAW_COPILOT_CLI_ROUTED=true` (default) enables a routed copilot path that:
+  - generates the suggestion via `openclaw agent --json`
+  - delivers the final text via `openclaw message send --json`
+- This avoids hook-path `NO_REPLY` suppression on routed channels.
+- Tune with:
+  - `OPENCLAW_CLI_BIN` (default: `openclaw`)
+  - `OPENCLAW_AGENT_CLI_TIMEOUT_MS` (default: `45000`)
+  - `OPENCLAW_MESSAGE_CLI_TIMEOUT_MS` (default: `20000`)
+- Route/session mappings are persisted across bridge restarts so active meetings keep chat routing:
+  - `BRIDGE_STATE_FILE` (default: `.bridge-state.json` in the bridge directory)
+
 ## Reaction Style Defaults
 
 - Reactions are final-transcript driven by default (`REACT_ON_PARTIAL=false`)
