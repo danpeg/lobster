@@ -52,11 +52,19 @@ npm start
 
 - Explicit trigger only (default wake names: `fugu`, `clawpilot`, `copilot`)
 - Uses ElevenLabs TTS, then Recall `output_media` to speak in meeting
+- Optional approval gate in Meet chat: bot posts a hand-raise message and waits for `yes` before speaking
 - Configure in `openclaw.json`:
   - `integrations.elevenlabs.apiKey`
   - `plugins.entries.clawpilot.config.voice.enabled`
   - `plugins.entries.clawpilot.config.voice.voiceId`
   - Optional: `wakeNames`, `modelId`, `cooldownMs`, `minSilenceMs`, `maxChars`, `mirrorToChat`
+- Runtime env overrides:
+  - `VOICE_REQUIRE_WAKE=false`
+  - `VOICE_COOLDOWN_MS=3000`
+  - `VOICE_MIN_SILENCE_MS=350`
+  - `VOICE_TRIGGER_ON_PARTIAL=true`
+  - `VOICE_APPROVAL_REQUIRED=true`
+  - `VOICE_APPROVAL_TIMEOUT_MS=20000`
 - Chat controls:
   - `/clawpilot voice on`
   - `/clawpilot voice off`

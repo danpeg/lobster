@@ -309,6 +309,13 @@ const VOICE_REQUIRE_WAKE = parseBooleanLike(
   parseBooleanLike(process.env.VOICE_REQUIRE_WAKE, false)
 );
 const VOICE_TRIGGER_ON_PARTIAL = parseBooleanLike(process.env.VOICE_TRIGGER_ON_PARTIAL, true);
+const VOICE_APPROVAL_REQUIRED = parseBooleanLike(process.env.VOICE_APPROVAL_REQUIRED, true);
+const VOICE_APPROVAL_TIMEOUT_MS = parseIntegerLike(process.env.VOICE_APPROVAL_TIMEOUT_MS, 20000);
+const VOICE_APPROVAL_NOTIFY_TIMEOUT = parseBooleanLike(process.env.VOICE_APPROVAL_NOTIFY_TIMEOUT, true);
+const VOICE_APPROVAL_PROMPT = process.env.VOICE_APPROVAL_PROMPT
+  || '✋ I have a suggestion. Reply "yes" within 20s and I will speak.';
+const VOICE_APPROVAL_ACK = process.env.VOICE_APPROVAL_ACK || 'Speaking now.';
+const VOICE_APPROVAL_TIMEOUT_ACK = process.env.VOICE_APPROVAL_TIMEOUT_ACK || 'No approval received, skipping voice for now.';
 const VOICE_PRIME_ON_JOIN = parseBooleanLike(process.env.VOICE_PRIME_ON_JOIN, true);
 const VOICE_PRIME_WAIT_TIMEOUT_MS = parseIntegerLike(process.env.VOICE_PRIME_WAIT_TIMEOUT_MS, 90000);
 const VOICE_PRIME_POLL_MS = parseIntegerLike(process.env.VOICE_PRIME_POLL_MS, 2000);
@@ -901,9 +908,40 @@ async function sendRecallOutputAudio(botId, b64Data) {
   };
 }
 
+async function sendRecallChatMessage(botId, message, to = 'everyone') {
+  if (!botId || !RECALL_API_KEY) {
+    return { ok: false, status: null, error: 'missing_bot_or_recall_api_key' };
+  }
+  const text = String(message || '').trim();
+  if (!text) {
+    return { ok: false, status: null, error: 'empty_message' };
+  }
+  const response = await fetch(`${RECALL_BOTS_ENDPOINT}/${botId}/send_chat_message/`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Token ${RECALL_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ to, message: text.slice(0, 500) })
+  });
+  const raw = await response.text();
+  const parsed = safeParseJson(raw) || raw;
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      error: typeof parsed === 'string' ? parsed.slice(0, 240) : JSON.stringify(parsed).slice(0, 240)
+    };
+  }
+  return { ok: true, status: response.status, result: parsed };
+}
+
 const lastVoiceAtByBotId = new Map();
 const voiceTaskByBotId = new Map();
 const voicePrimedBotIds = new Set();
+const pendingVoiceApprovalByBotId = new Map();
+const voiceApprovalChatSupportedByBotId = new Map();
+let voiceApprovalSeq = 0;
 let lastVoiceDebug = {
   at: null,
   stage: 'init',
@@ -917,6 +955,16 @@ let lastPrimeDebug = {
   at: null,
   stage: 'init',
   bot_id: null,
+  result: null
+};
+let lastApprovalDebug = {
+  at: null,
+  stage: 'init',
+  bot_id: null,
+  request_id: null,
+  speaker: null,
+  approver: null,
+  line: null,
   result: null
 };
 
@@ -1037,6 +1085,336 @@ async function schedulePrimeOnLaunch(botId) {
   console.warn(`[VoiceMVP] prime_on_join timeout bot=${botId} wait_ms=${VOICE_PRIME_WAIT_TIMEOUT_MS}`);
 }
 
+function voiceCooldownRemainingMs(botId, nowMs = Date.now()) {
+  const lastVoiceAt = lastVoiceAtByBotId.get(botId) || 0;
+  return Math.max(0, VOICE_COOLDOWN_MS - (nowMs - lastVoiceAt));
+}
+
+function normalizeVoiceApprovalText(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/["'`]/g, '')
+    .replace(/[!?.,]+$/g, '')
+    .trim();
+}
+
+function isVoiceApprovalText(text) {
+  const normalized = normalizeVoiceApprovalText(text);
+  return /^(yes|y|yep|yeah|yup|ok|okay|sure|go ahead|please do|do it|speak|send it)(\b|$)/i.test(normalized);
+}
+
+function isVoiceDeclineText(text) {
+  const normalized = normalizeVoiceApprovalText(text);
+  return /^(no|nope|nah|skip|dont|don't|stop|cancel|not now)(\b|$)/i.test(normalized);
+}
+
+function extractRecallChatText(event) {
+  const candidates = [
+    event?.data?.data?.data?.text,
+    event?.data?.data?.data?.message,
+    event?.data?.data?.data?.body,
+    event?.data?.data?.data?.content,
+    event?.data?.data?.text,
+    event?.data?.data?.message,
+    event?.data?.data?.body,
+    event?.data?.data?.content,
+    event?.data?.text,
+    event?.data?.message,
+    event?.data?.body,
+    event?.data?.content
+  ];
+  for (const value of candidates) {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+    if (value && typeof value === 'object') {
+      for (const key of ['text', 'message', 'body', 'content']) {
+        const nested = value[key];
+        if (typeof nested === 'string' && nested.trim()) {
+          return nested.trim();
+        }
+      }
+    }
+  }
+  return '';
+}
+
+function extractRecallChatSender(event) {
+  const participant = event?.data?.data?.participant || event?.data?.participant || {};
+  return String(
+    participant.name
+      || participant.display_name
+      || participant.user_name
+      || participant.email
+      || 'Unknown'
+  ).trim();
+}
+
+function clearPendingVoiceApproval(botId, reason = 'cleared') {
+  const pending = pendingVoiceApprovalByBotId.get(botId);
+  if (!pending) return null;
+  if (pending.timeout_handle) {
+    clearTimeout(pending.timeout_handle);
+  }
+  pendingVoiceApprovalByBotId.delete(botId);
+  lastApprovalDebug = {
+    at: new Date().toISOString(),
+    stage: reason,
+    bot_id: botId || null,
+    request_id: pending.request_id || null,
+    speaker: pending.speaker || null,
+    approver: pending.approved_by || null,
+    line: pending.line || null,
+    result: null
+  };
+  return pending;
+}
+
+async function hasChatApprovalSubscription(botId) {
+  if (!botId || !RECALL_API_KEY) return false;
+  if (voiceApprovalChatSupportedByBotId.has(botId)) {
+    return voiceApprovalChatSupportedByBotId.get(botId);
+  }
+  try {
+    const response = await fetch(`${RECALL_BOTS_ENDPOINT}/${botId}`, {
+      headers: {
+        Authorization: `Token ${RECALL_API_KEY}`
+      }
+    });
+    if (!response.ok) {
+      voiceApprovalChatSupportedByBotId.set(botId, false);
+      return false;
+    }
+    const payload = await response.json();
+    const endpoints = Array.isArray(payload?.recording_config?.realtime_endpoints)
+      ? payload.recording_config.realtime_endpoints
+      : [];
+    const supported = endpoints.some((endpoint) => {
+      const events = Array.isArray(endpoint?.events) ? endpoint.events : [];
+      return events.includes('participant_events.chat_message');
+    });
+    voiceApprovalChatSupportedByBotId.set(botId, supported);
+    return supported;
+  } catch {
+    voiceApprovalChatSupportedByBotId.set(botId, false);
+    return false;
+  }
+}
+
+async function handleVoiceApprovalTimeout(botId, requestId) {
+  const pending = pendingVoiceApprovalByBotId.get(botId);
+  if (!pending || pending.request_id !== requestId) return;
+  clearPendingVoiceApproval(botId, 'approval_timeout');
+  lastVoiceDebug.stage = 'approval_timeout';
+  lastVoiceDebug.result = { request_id: requestId };
+  console.log(`[VoiceMVP] approval timeout bot=${botId} request=${requestId}`);
+  if (VOICE_APPROVAL_NOTIFY_TIMEOUT) {
+    await sendRecallChatMessage(botId, VOICE_APPROVAL_TIMEOUT_ACK);
+  }
+}
+
+async function speakPreparedVoiceLine({ botId, speaker, line, approvedBy = null }) {
+  return enqueueVoiceTask(botId, async () => {
+    lastVoiceDebug.stage = 'queued';
+    const remaining = voiceCooldownRemainingMs(botId);
+    if (remaining > 0) {
+      console.log(`[VoiceMVP] cooldown skip bot=${botId} wait_ms=${remaining}`);
+      lastVoiceDebug.stage = 'cooldown_skip';
+      lastVoiceDebug.result = { wait_ms: remaining };
+      return { ok: false, stage: 'cooldown_skip', wait_ms: remaining };
+    }
+
+    await sleep(VOICE_MIN_SILENCE_MS);
+    lastVoiceDebug.stage = 'tts_request';
+    lastVoiceDebug.result = line;
+
+    const tts = await synthesizeElevenLabsSpeech(line);
+    if (!tts.ok) {
+      console.error(`[VoiceMVP] TTS failed bot=${botId} error=${tts.error || 'unknown'}`);
+      lastVoiceDebug.stage = 'tts_failed';
+      lastVoiceDebug.result = tts.error || 'unknown';
+      return { ok: false, stage: 'tts_failed', error: tts.error || 'unknown' };
+    }
+    lastVoiceDebug.stage = 'tts_ok';
+
+    const delivery = await sendRecallOutputAudio(botId, tts.b64Data);
+    if (!delivery.ok) {
+      console.error(
+        `[VoiceMVP] Recall ${delivery.endpoint || 'output_audio'} failed bot=${botId} status=${delivery.status || 'n/a'} error=${delivery.error || 'unknown'}`
+      );
+      lastVoiceDebug.stage = 'delivery_failed';
+      lastVoiceDebug.result = {
+        endpoint: delivery.endpoint || null,
+        status: delivery.status || null,
+        error: delivery.error || 'unknown'
+      };
+      return {
+        ok: false,
+        stage: 'delivery_failed',
+        endpoint: delivery.endpoint || null,
+        status: delivery.status || null,
+        error: delivery.error || 'unknown'
+      };
+    }
+
+    lastVoiceAtByBotId.set(botId, Date.now());
+    console.log(
+      `[VoiceMVP] spoke bot=${botId} speaker=${speaker} chars=${line.length} endpoint=${delivery.endpoint}${approvedBy ? ` approver=${approvedBy}` : ''}`
+    );
+    lastVoiceDebug.stage = 'spoke';
+    lastVoiceDebug.result = { endpoint: delivery.endpoint || null, chars: line.length, approved_by: approvedBy };
+    if (VOICE_MIRROR_TO_CHAT) {
+      await sendVerboseMirrorToOpenClaw(`[MEETING VOICE] ${line}`, { botId });
+    }
+    return { ok: true, stage: 'spoke', endpoint: delivery.endpoint || null, chars: line.length };
+  });
+}
+
+async function requestVoiceApproval({ botId, speaker, trigger, line, isPartial }) {
+  const chatSubscribed = await hasChatApprovalSubscription(botId);
+  if (!chatSubscribed) {
+    lastVoiceDebug.stage = 'approval_unavailable';
+    lastVoiceDebug.result = {
+      reason: 'bot_missing_chat_message_event_subscription'
+    };
+    await sendRecallChatMessage(
+      botId,
+      'Voice approval via Meet chat is unavailable for this bot instance. Relaunch with /clawpilot join and try again.'
+    );
+    return { ok: false, stage: 'approval_unavailable', error: 'missing_chat_message_subscription' };
+  }
+
+  const nowMs = Date.now();
+  const existing = pendingVoiceApprovalByBotId.get(botId);
+  if (existing && existing.expires_at_ms > nowMs) {
+    lastVoiceDebug.stage = 'approval_pending';
+    lastVoiceDebug.result = { request_id: existing.request_id, expires_at: new Date(existing.expires_at_ms).toISOString() };
+    return { ok: false, stage: 'approval_pending', request_id: existing.request_id };
+  }
+  if (existing) {
+    clearPendingVoiceApproval(botId, 'approval_replaced');
+  }
+
+  const remaining = voiceCooldownRemainingMs(botId, nowMs);
+  if (remaining > 0) {
+    lastVoiceDebug.stage = 'cooldown_skip';
+    lastVoiceDebug.result = { wait_ms: remaining };
+    return { ok: false, stage: 'cooldown_skip', wait_ms: remaining };
+  }
+
+  const timeoutMs = Math.max(3000, VOICE_APPROVAL_TIMEOUT_MS);
+  const requestId = `${botId || 'unknown'}:${++voiceApprovalSeq}`;
+  const prompt = VOICE_APPROVAL_PROMPT
+    .replace(/\{seconds\}/gi, String(Math.max(1, Math.round(timeoutMs / 1000))));
+
+  lastVoiceDebug.stage = 'approval_prompt';
+  lastVoiceDebug.result = { request_id: requestId };
+  const promptResult = await sendRecallChatMessage(botId, prompt);
+  if (!promptResult.ok) {
+    lastVoiceDebug.stage = 'approval_prompt_failed';
+    lastVoiceDebug.result = { request_id: requestId, error: promptResult.error || 'unknown' };
+    return { ok: false, stage: 'approval_prompt_failed', error: promptResult.error || 'unknown' };
+  }
+
+  const pending = {
+    request_id: requestId,
+    bot_id: botId,
+    speaker: speaker || null,
+    trigger_kind: trigger?.kind || null,
+    line,
+    transcript_partial: Boolean(isPartial),
+    created_at_ms: nowMs,
+    expires_at_ms: nowMs + timeoutMs,
+    approved_by: null,
+    timeout_handle: null
+  };
+  pending.timeout_handle = setTimeout(() => {
+    handleVoiceApprovalTimeout(botId, requestId).catch((err) => {
+      console.warn(`[VoiceMVP] approval timeout handler failed bot=${botId} request=${requestId} error=${err.message}`);
+    });
+  }, timeoutMs);
+  pendingVoiceApprovalByBotId.set(botId, pending);
+
+  lastApprovalDebug = {
+    at: new Date().toISOString(),
+    stage: 'approval_requested',
+    bot_id: botId,
+    request_id: requestId,
+    speaker: speaker || null,
+    approver: null,
+    line,
+    result: { timeout_ms: timeoutMs, partial: Boolean(isPartial) }
+  };
+  lastVoiceDebug.stage = 'awaiting_approval';
+  lastVoiceDebug.result = {
+    request_id: requestId,
+    timeout_ms: timeoutMs
+  };
+  return { ok: true, stage: 'awaiting_approval', request_id: requestId, timeout_ms: timeoutMs };
+}
+
+async function handleRecallChatMessage(event) {
+  const botId = event?.data?.bot?.id || event?.data?.data?.bot?.id || null;
+  const text = extractRecallChatText(event);
+  if (!botId) return;
+  if (!text) {
+    const payloadPreview = JSON.stringify(event?.data?.data || {}).slice(0, 500);
+    console.log(`[MeetChat] bot=${botId} empty_text payload=${payloadPreview}`);
+    return;
+  }
+
+  const sender = extractRecallChatSender(event);
+  console.log(`[MeetChat] bot=${botId} sender=${sender} text=${JSON.stringify(text)}`);
+
+  const pending = pendingVoiceApprovalByBotId.get(botId);
+  if (!pending) return;
+  if (pending.expires_at_ms <= Date.now()) {
+    await handleVoiceApprovalTimeout(botId, pending.request_id);
+    return;
+  }
+
+  if (isVoiceDeclineText(text)) {
+    clearPendingVoiceApproval(botId, 'approval_declined');
+    lastVoiceDebug.stage = 'approval_declined';
+    lastVoiceDebug.result = { request_id: pending.request_id, sender };
+    await sendRecallChatMessage(botId, 'Understood, skipping voice.');
+    return;
+  }
+
+  if (!isVoiceApprovalText(text)) {
+    return;
+  }
+
+  const approved = clearPendingVoiceApproval(botId, 'approval_granted');
+  if (!approved) return;
+  approved.approved_by = sender;
+  lastApprovalDebug = {
+    at: new Date().toISOString(),
+    stage: 'approval_granted',
+    bot_id: botId,
+    request_id: approved.request_id,
+    speaker: approved.speaker || null,
+    approver: sender,
+    line: approved.line || null,
+    result: null
+  };
+  lastVoiceDebug.stage = 'approval_granted';
+  lastVoiceDebug.result = { request_id: approved.request_id, sender };
+
+  await sendRecallChatMessage(botId, VOICE_APPROVAL_ACK);
+  const spoken = await speakPreparedVoiceLine({
+    botId,
+    speaker: approved.speaker || sender,
+    line: approved.line,
+    approvedBy: sender
+  });
+  if (!spoken?.ok && spoken?.stage === 'cooldown_skip') {
+    await sendRecallChatMessage(botId, `Still cooling down. Try again in ${Math.max(1, Math.ceil((spoken.wait_ms || 0) / 1000))}s.`);
+  } else if (!spoken?.ok) {
+    await sendRecallChatMessage(botId, 'I could not speak that yet. I will keep trying on the next request.');
+  }
+}
+
 async function maybeSpeakTriggeredLine({ botId, speaker, text, isPartial = false }) {
   lastVoiceDebug = {
     at: new Date().toISOString(),
@@ -1067,54 +1445,15 @@ async function maybeSpeakTriggeredLine({ botId, speaker, text, isPartial = false
     return;
   }
 
-  await enqueueVoiceTask(botId, async () => {
-    lastVoiceDebug.stage = 'queued';
-    const now = Date.now();
-    const lastVoiceAt = lastVoiceAtByBotId.get(botId) || 0;
-    if (now - lastVoiceAt < VOICE_COOLDOWN_MS) {
-      console.log(`[VoiceMVP] cooldown skip bot=${botId} wait_ms=${VOICE_COOLDOWN_MS - (now - lastVoiceAt)}`);
-      lastVoiceDebug.stage = 'cooldown_skip';
-      lastVoiceDebug.result = `wait_ms=${VOICE_COOLDOWN_MS - (now - lastVoiceAt)}`;
-      return;
-    }
+  const line = buildMvpVoiceReply(trigger, speaker);
+  if (!line) return;
 
-    await sleep(VOICE_MIN_SILENCE_MS);
-    const line = buildMvpVoiceReply(trigger, speaker);
-    if (!line) return;
-    lastVoiceDebug.stage = 'tts_request';
-    lastVoiceDebug.result = line;
+  if (VOICE_APPROVAL_REQUIRED) {
+    await requestVoiceApproval({ botId, speaker, trigger, line, isPartial });
+    return;
+  }
 
-    const tts = await synthesizeElevenLabsSpeech(line);
-    if (!tts.ok) {
-      console.error(`[VoiceMVP] TTS failed bot=${botId} error=${tts.error || 'unknown'}`);
-      lastVoiceDebug.stage = 'tts_failed';
-      lastVoiceDebug.result = tts.error || 'unknown';
-      return;
-    }
-    lastVoiceDebug.stage = 'tts_ok';
-
-    const delivery = await sendRecallOutputAudio(botId, tts.b64Data);
-    if (!delivery.ok) {
-      console.error(
-        `[VoiceMVP] Recall ${delivery.endpoint || 'output_audio'} failed bot=${botId} status=${delivery.status || 'n/a'} error=${delivery.error || 'unknown'}`
-      );
-      lastVoiceDebug.stage = 'delivery_failed';
-      lastVoiceDebug.result = {
-        endpoint: delivery.endpoint || null,
-        status: delivery.status || null,
-        error: delivery.error || 'unknown'
-      };
-      return;
-    }
-
-    lastVoiceAtByBotId.set(botId, Date.now());
-    console.log(`[VoiceMVP] spoke bot=${botId} speaker=${speaker} chars=${line.length} endpoint=${delivery.endpoint}`);
-    lastVoiceDebug.stage = 'spoke';
-    lastVoiceDebug.result = { endpoint: delivery.endpoint || null, chars: line.length };
-    if (VOICE_MIRROR_TO_CHAT) {
-      await sendVerboseMirrorToOpenClaw(`[MEETING VOICE] ${line}`, { botId });
-    }
-  });
+  await speakPreparedVoiceLine({ botId, speaker, line });
 }
 
 async function sendDebugTranscript(speaker, text, isPartial, options = {}) {
@@ -1385,6 +1724,8 @@ app.get('/health', (req, res) => {
       automatic_audio_payload_source: VOICE_AUTOMATIC_AUDIO_SOURCE,
       require_wake: VOICE_REQUIRE_WAKE,
       trigger_on_partial: VOICE_TRIGGER_ON_PARTIAL,
+      approval_required: VOICE_APPROVAL_REQUIRED,
+      approval_timeout_ms: VOICE_APPROVAL_TIMEOUT_MS,
       wake_names: VOICE_WAKE_NAMES,
       cooldown_ms: VOICE_COOLDOWN_MS,
       min_silence_ms: VOICE_MIN_SILENCE_MS,
@@ -1392,7 +1733,8 @@ app.get('/health', (req, res) => {
       mirror_to_chat: VOICE_MIRROR_TO_CHAT,
       elevenlabs_api_key_source: ELEVENLABS_API_KEY_SOURCE,
       elevenlabs_voice_id_source: ELEVENLABS_VOICE_ID_SOURCE,
-      queue_size: voiceTaskByBotId.size
+      queue_size: voiceTaskByBotId.size,
+      approvals_pending: pendingVoiceApprovalByBotId.size
     },
     direct_delivery_adapters: getDirectDeliveryStatus(),
     telegram: {
@@ -1454,6 +1796,8 @@ app.get('/copilot/status', (req, res) => {
       automatic_audio_payload_source: VOICE_AUTOMATIC_AUDIO_SOURCE,
       require_wake: VOICE_REQUIRE_WAKE,
       trigger_on_partial: VOICE_TRIGGER_ON_PARTIAL,
+      approval_required: VOICE_APPROVAL_REQUIRED,
+      approval_timeout_ms: VOICE_APPROVAL_TIMEOUT_MS,
       wake_names: VOICE_WAKE_NAMES,
       cooldown_ms: VOICE_COOLDOWN_MS,
       min_silence_ms: VOICE_MIN_SILENCE_MS,
@@ -1461,7 +1805,8 @@ app.get('/copilot/status', (req, res) => {
       mirror_to_chat: VOICE_MIRROR_TO_CHAT,
       elevenlabs_api_key_source: ELEVENLABS_API_KEY_SOURCE,
       elevenlabs_voice_id_source: ELEVENLABS_VOICE_ID_SOURCE,
-      queue_size: voiceTaskByBotId.size
+      queue_size: voiceTaskByBotId.size,
+      approvals_pending: pendingVoiceApprovalByBotId.size
     },
     direct_delivery_adapters: getDirectDeliveryStatus(),
     telegram: {
@@ -1552,6 +1897,10 @@ function forgetBotSession(botId) {
   if (!botId) {
     return;
   }
+  clearPendingVoiceApproval(botId, 'bot_session_forgotten');
+  voiceApprovalChatSupportedByBotId.delete(botId);
+  lastVoiceAtByBotId.delete(botId);
+  voicePrimedBotIds.delete(botId);
   const removed = meetingSessionByBotId.delete(botId);
   routeTargetByBotId.delete(botId);
   if (routeTargetByBotId.size === 0) {
@@ -1830,7 +2179,7 @@ app.post('/launch', async (req, res) => {
         {
           type: 'webhook',
           url: `${WEBHOOK_BASE_URL.replace(/\/$/, '')}/webhook?token=${WEBHOOK_SECRET}`,
-          events: ['transcript.data', 'transcript.partial_data']
+          events: ['transcript.data', 'transcript.partial_data', 'participant_events.chat_message']
         }
       ]
     }
@@ -1906,19 +2255,21 @@ app.post('/launch', async (req, res) => {
 // Main webhook endpoint
 app.post('/webhook', async (req, res) => {
   const eventType = req.body?.event || 'unknown';
-  const isTranscriptEvent =
-    eventType === 'transcript.data' || eventType === 'transcript.partial_data';
+  const isRealtimeEvent =
+    eventType === 'transcript.data'
+    || eventType === 'transcript.partial_data'
+    || eventType === 'participant_events.chat_message';
 
-  // Verify webhook token (strict for transcript events; permissive for status events).
+  // Verify webhook token (strict for per-bot realtime events; permissive for status events).
   const token = req.query.token || req.query.webhook_token || req.query.secret || '';
   const tokenPreview = token ? `${String(token).slice(0, 8)}...` : 'missing';
-  if (isTranscriptEvent && (!token || token !== WEBHOOK_SECRET)) {
+  if (isRealtimeEvent && (!token || token !== WEBHOOK_SECRET)) {
     console.log(
       `[${new Date().toISOString()}] Webhook REJECTED - invalid token (${tokenPreview}) event=${eventType}`
     );
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  if (!isTranscriptEvent && (!token || token !== WEBHOOK_SECRET)) {
+  if (!isRealtimeEvent && (!token || token !== WEBHOOK_SECRET)) {
     console.log(
       `[${new Date().toISOString()}] Webhook accepted without token (status event) event=${eventType}`
     );
@@ -1951,6 +2302,10 @@ app.post('/webhook', async (req, res) => {
       case 'transcript.partial_data':
         await handleRecallTranscript(event.data, true, event);
         break;
+
+      case 'participant_events.chat_message':
+        await handleRecallChatMessage(event);
+        break;
         
       default:
         console.log('Unhandled event type:', event.event);
@@ -1977,6 +2332,7 @@ async function handleBotStatus(event) {
   switch (eventType) {
     case 'bot.in_call_recording':
       if (botId !== 'unknown') {
+        clearPendingVoiceApproval(botId, 'bot_recording_started');
         const parsed = updatedAt ? Date.parse(updatedAt) : NaN;
         meetingStartByBot.set(botId, Number.isFinite(parsed) ? parsed : Date.now());
       }
@@ -1998,6 +2354,7 @@ async function handleBotStatus(event) {
     case 'bot.call_ended':
     case 'bot.done':
       if (botId !== 'unknown') {
+        clearPendingVoiceApproval(botId, 'bot_done');
         meetingStartByBot.delete(botId);
         relativeEpochBaseByBot.delete(botId);
         voicePrimedBotIds.delete(botId);
@@ -2007,6 +2364,7 @@ async function handleBotStatus(event) {
       break;
     case 'bot.fatal':
       if (botId !== 'unknown') {
+        clearPendingVoiceApproval(botId, 'bot_fatal');
         meetingStartByBot.delete(botId);
         relativeEpochBaseByBot.delete(botId);
         voicePrimedBotIds.delete(botId);
@@ -2493,11 +2851,14 @@ app.get('/voice', (req, res) => {
     automatic_audio_payload_source: VOICE_AUTOMATIC_AUDIO_SOURCE,
     require_wake: VOICE_REQUIRE_WAKE,
     trigger_on_partial: VOICE_TRIGGER_ON_PARTIAL,
+    approval_required: VOICE_APPROVAL_REQUIRED,
+    approval_timeout_ms: VOICE_APPROVAL_TIMEOUT_MS,
     wake_names: VOICE_WAKE_NAMES,
     cooldown_ms: VOICE_COOLDOWN_MS,
     min_silence_ms: VOICE_MIN_SILENCE_MS,
     max_chars: VOICE_MAX_CHARS,
-    mirror_to_chat: VOICE_MIRROR_TO_CHAT
+    mirror_to_chat: VOICE_MIRROR_TO_CHAT,
+    approvals_pending: pendingVoiceApprovalByBotId.size
   });
 });
 
@@ -2507,7 +2868,8 @@ app.get('/voice/debug', (req, res) => {
     voice_configured: voiceConfigured(),
     cooldown_ms: VOICE_COOLDOWN_MS,
     last: lastVoiceDebug,
-    prime: lastPrimeDebug
+    prime: lastPrimeDebug,
+    approval: lastApprovalDebug
   });
 });
 
@@ -2642,7 +3004,9 @@ app.listen(PORT, HOST, () => {
   console.log(`Health check: http://localhost:${PORT}/health`);
   console.log(`[OpenClawHook] wake=${OPENCLAW_HOOK_URL} agent=${OPENCLAW_AGENT_HOOK_URL}`);
   console.log(`[OpenClawHook] token=${OPENCLAW_HOOK_TOKEN ? 'set' : 'missing'} url_source=${OPENCLAW_HOOK_URL_SOURCE} token_source=${OPENCLAW_HOOK_TOKEN_SOURCE}`);
-  console.log(`[VoiceMVP] enabled=${VOICE_ENABLED} configured=${voiceConfigured()} provider=${VOICE_PROVIDER} require_wake=${VOICE_REQUIRE_WAKE} trigger_on_partial=${VOICE_TRIGGER_ON_PARTIAL} wake_names=${VOICE_WAKE_NAMES.join(',')}`);
+  console.log(
+    `[VoiceMVP] enabled=${VOICE_ENABLED} configured=${voiceConfigured()} provider=${VOICE_PROVIDER} require_wake=${VOICE_REQUIRE_WAKE} trigger_on_partial=${VOICE_TRIGGER_ON_PARTIAL} approval_required=${VOICE_APPROVAL_REQUIRED} approval_timeout_ms=${VOICE_APPROVAL_TIMEOUT_MS} wake_names=${VOICE_WAKE_NAMES.join(',')}`
+  );
   if (!OPENCLAW_HOOK_TOKEN) {
     console.warn(`[OpenClawHook] token missing. Configure hooks.token in ${OPENCLAW_HOOK_DEFAULTS.configPath}`);
   }
