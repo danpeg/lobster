@@ -29,6 +29,28 @@ npm start
 - `WEBHOOK_SECRET`
 - `WEBHOOK_BASE_URL`
 
+## Bridge API Auth (Recommended)
+
+- Set `BRIDGE_API_TOKEN` to enforce bearer auth on bridge control/data routes.
+- Send `Authorization: Bearer <BRIDGE_API_TOKEN>` from trusted callers (for example the ClawPilot plugin using `bridgeToken`).
+- `/health` and `/webhook` remain unauthenticated for liveness/Recall delivery.
+
+Protected routes when `BRIDGE_API_TOKEN` is set:
+
+- `POST /launch`
+- `GET /copilot/status`
+- `POST /mute`
+- `POST /unmute`
+- `POST /meetverbose/on`
+- `POST /meetverbose/off`
+- `GET /meeting`
+- `GET /meeting/state`
+- `GET /meeting/stream`
+
+Migration note:
+
+- If `/clawpilot` commands start returning `401`, set plugin config `bridgeToken` to match `BRIDGE_API_TOKEN`.
+
 ## OpenClaw Configuration Source
 
 - Hook URL/token are read from `openclaw.json` (`hooks.path`, `hooks.token`, `gateway.port`)

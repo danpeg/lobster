@@ -116,6 +116,8 @@ const OPENCLAW_HOOK_DEFAULTS = readOpenClawHookDefaults();
 
 // Webhook secret for verifying incoming requests
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
+const BRIDGE_API_TOKEN = String(process.env.BRIDGE_API_TOKEN || '').trim();
+const BRIDGE_AUTH_ENABLED = BRIDGE_API_TOKEN.length > 0;
 const WEBHOOK_BASE_URL = process.env.WEBHOOK_BASE_URL || `http://127.0.0.1:${PORT}`;
 const RECALL_API_BASE = String(process.env.RECALL_API_BASE || 'https://eu-central-1.recall.ai').replace(/\/+$/, '');
 const RECALL_BOTS_ENDPOINT = `${RECALL_API_BASE}/api/v1/bot`;
@@ -617,6 +619,98 @@ function hasHighValueCue(text) {
 
 app.use(express.json());
 
+function getBearerTokenFromHeader(rawHeader) {
+  if (!rawHeader || typeof rawHeader !== 'string') return '';
+  const [scheme, token] = rawHeader.trim().split(/\s+/, 2);
+  if (!scheme || !token) return '';
+  if (scheme.toLowerCase() !== 'bearer') return '';
+  return token.trim();
+}
+
+function safeTokenEquals(left, right) {
+  if (!left || !right) return false;
+  const leftBuf = Buffer.from(String(left));
+  const rightBuf = Buffer.from(String(right));
+  if (leftBuf.length !== rightBuf.length) return false;
+  return crypto.timingSafeEqual(leftBuf, rightBuf);
+}
+
+function requireBridgeAuth(req, res, next) {
+  if (!BRIDGE_AUTH_ENABLED) return next();
+  const headerValue = req.get('authorization') || '';
+  const token = getBearerTokenFromHeader(headerValue);
+  if (!safeTokenEquals(token, BRIDGE_API_TOKEN)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  return next();
+}
+
+function sanitizeMeetingUrlValue(value) {
+  if (value && typeof value === 'object') {
+    const platform = typeof value.platform === 'string' ? value.platform.trim() : '';
+    const meetingId = typeof value.meeting_id === 'string' ? value.meeting_id.trim() : '';
+    const out = {};
+    if (platform) out.platform = platform;
+    if (meetingId) out.meeting_id = meetingId;
+    if (Object.keys(out).length > 0) return out;
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    return extractMeetingTarget(value) || null;
+  }
+
+  return null;
+}
+
+function firstNonEmptyString(...candidates) {
+  for (const value of candidates) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+  return '';
+}
+
+function buildSafeLaunchResponse(raw = {}, fallback = {}) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const base = fallback && typeof fallback === 'object' ? fallback : {};
+  const safe = {};
+
+  const id = firstNonEmptyString(source.id, base.id);
+  if (id) safe.id = id;
+
+  const status = firstNonEmptyString(source.status, base.status);
+  if (status) safe.status = status;
+
+  const botName = firstNonEmptyString(source.bot_name, base.bot_name);
+  if (botName) safe.bot_name = botName;
+
+  const meetingUrl = sanitizeMeetingUrlValue(source.meeting_url ?? base.meeting_url);
+  if (meetingUrl) safe.meeting_url = meetingUrl;
+
+  const joinAt = firstNonEmptyString(source.join_at, base.join_at);
+  if (joinAt) safe.join_at = joinAt;
+
+  const meetingSession = firstNonEmptyString(source.meeting_session, base.meeting_session);
+  if (meetingSession) safe.meeting_session = meetingSession;
+
+  const routeTarget = normalizeRouteTarget(source.routing_target) || normalizeRouteTarget(base.routing_target);
+  if (routeTarget || Object.prototype.hasOwnProperty.call(source, 'routing_target') || Object.prototype.hasOwnProperty.call(base, 'routing_target')) {
+    safe.routing_target = routeTarget || null;
+  }
+
+  const replacedFrom = firstNonEmptyString(source.replaced_from_bot_id, base.replaced_from_bot_id);
+  if (replacedFrom) safe.replaced_from_bot_id = replacedFrom;
+
+  const error = firstNonEmptyString(source.error, base.error);
+  if (error) safe.error = error;
+
+  const code = firstNonEmptyString(source.code, base.code);
+  if (code) safe.code = code;
+
+  return safe;
+}
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({
@@ -646,12 +740,12 @@ app.get('/health', (req, res) => {
 });
 
 // Mute/unmute endpoints
-app.post('/mute', (req, res) => {
+app.post('/mute', requireBridgeAuth, (req, res) => {
   const state = setMuteState(true, 'http:/mute');
   res.json({ ...state, message: 'Transcript processing paused' });
 });
 
-app.post('/unmute', (req, res) => {
+app.post('/unmute', requireBridgeAuth, (req, res) => {
   const state = setMuteState(false, 'http:/unmute');
   res.json({ ...state, message: 'Transcript processing resumed' });
 });
@@ -660,7 +754,7 @@ app.get('/mute-status', (req, res) => {
   res.json({ muted: IS_MUTED });
 });
 
-app.get('/copilot/status', (req, res) => {
+app.get('/copilot/status', requireBridgeAuth, (req, res) => {
   res.json({
     muted: IS_MUTED,
     meetverbose: DEBUG_MODE,
@@ -970,7 +1064,7 @@ async function waitForBotTerminal(botId, timeoutMs = BOT_REPLACE_WAIT_TIMEOUT_MS
 }
 
 // Proxy endpoint to launch bots (avoids CORS)
-app.post('/launch', async (req, res) => {
+app.post('/launch', requireBridgeAuth, async (req, res) => {
   const { meeting_url, language, provider, replace_active, bot_name, agent_name, route_target } = req.body;
   
   if (!meeting_url) {
@@ -988,31 +1082,37 @@ app.post('/launch', async (req, res) => {
   let replacedFromBotId = null;
   if (existingBot) {
     if (!shouldReplaceActive) {
-      return res.status(409).json({
+      return res.status(409).json(buildSafeLaunchResponse({
         id: existingBot.id,
         status: 'already_active',
-        meeting_url,
-        existing_bot: existingBot,
+        meeting_url: existingBot.meeting_url,
+        meeting_session: normalizeMeetingSessionId(launchSessionId),
         routing_target: effectiveRouteTarget || null
-      });
+      }));
     }
     const removal = await removeBotFromCall(existingBot.id);
     if (!removal.ok) {
-      return res.status(502).json({
+      return res.status(502).json(buildSafeLaunchResponse({
+        id: existingBot.id,
         status: 'replace_failed',
         meeting_url,
-        existing_bot: existingBot,
-        remove_error: removal
-      });
+        meeting_session: normalizeMeetingSessionId(launchSessionId),
+        routing_target: effectiveRouteTarget || null,
+        error: 'Failed to replace active bot',
+        code: removal.code || 'replace_failed'
+      }));
     }
     const waitResult = await waitForBotTerminal(existingBot.id);
     if (!waitResult.ok) {
-      return res.status(409).json({
+      return res.status(409).json(buildSafeLaunchResponse({
+        id: existingBot.id,
         status: 'replace_timeout',
         meeting_url,
-        existing_bot: existingBot,
-        wait_result: waitResult
-      });
+        meeting_session: normalizeMeetingSessionId(launchSessionId),
+        routing_target: effectiveRouteTarget || null,
+        error: 'Timed out waiting for active bot replacement',
+        code: waitResult.code || 'replace_timeout'
+      }));
     }
     replacedFromBotId = existingBot.id;
     forgetBotSession(existingBot.id);
@@ -1073,26 +1173,49 @@ app.post('/launch', async (req, res) => {
     });
 
     const data = await response.text();
+    const launchFallback = {
+      status: response.ok ? 'launch_requested' : 'launch_failed',
+      meeting_url,
+      meeting_session: normalizeMeetingSessionId(launchSessionId),
+      routing_target: effectiveRouteTarget || null
+    };
     try {
       const json = JSON.parse(data);
       if (replacedFromBotId) {
-        json.replaced_from_bot_id = replacedFromBotId;
+        launchFallback.replaced_from_bot_id = replacedFromBotId;
       }
       if (response.status >= 200 && response.status < 300 && json?.id) {
         rememberBotSession(json.id, launchSessionId);
         if (effectiveRouteTarget) {
           rememberBotRouteTarget(json.id, effectiveRouteTarget);
         }
-        json.meeting_session = normalizeMeetingSessionId(launchSessionId);
-        json.routing_target = effectiveRouteTarget || null;
+        launchFallback.id = json.id;
       }
-      return res.status(response.status).json(json);
+      return res.status(response.status).json(buildSafeLaunchResponse(json, launchFallback));
     } catch (e) {
-      return res.status(response.status).send(data);
+      return res.status(response.status).json(buildSafeLaunchResponse(
+        {
+          error: 'Recall launch API returned a non-JSON response',
+          code: `http_${response.status}`
+        },
+        launchFallback
+      ));
     }
   } catch (err) {
     console.error('Launch error:', err);
-    res.status(500).json({ error: err.message });
+    return res.status(500).json(buildSafeLaunchResponse(
+      {
+        error: 'Launch request failed',
+        code: 'launch_request_failed'
+      },
+      {
+        status: 'launch_failed',
+        meeting_url,
+        meeting_session: normalizeMeetingSessionId(launchSessionId),
+        routing_target: effectiveRouteTarget || null,
+        replaced_from_bot_id: replacedFromBotId || ''
+      }
+    ));
   }
 });
 
@@ -1578,12 +1701,12 @@ async function sendToOpenClaw(message, options = {}) {
 }
 
 // Meeting verbose mode toggle endpoints
-app.post('/meetverbose/on', (req, res) => {
+app.post('/meetverbose/on', requireBridgeAuth, (req, res) => {
   const state = setMeetVerboseState(true, 'http:/meetverbose/on');
   res.json({ ...state, message: 'Raw transcript mirror ON (active chat channel)' });
 });
 
-app.post('/meetverbose/off', (req, res) => {
+app.post('/meetverbose/off', requireBridgeAuth, (req, res) => {
   const state = setMeetVerboseState(false, 'http:/meetverbose/off');
   res.json({ ...state, message: 'Raw transcript mirror OFF - smart feedback only' });
 });
@@ -1644,7 +1767,7 @@ function readMeetingContent(req) {
 }
 
 // Serve the meeting page
-app.get('/meeting', (req, res) => {
+app.get('/meeting', requireBridgeAuth, (req, res) => {
   if (!req.query?.session && activeMeetingSessionId && activeMeetingSessionId !== 'default') {
     return res.redirect(302, `/meeting?session=${encodeURIComponent(activeMeetingSessionId)}`);
   }
@@ -1653,7 +1776,7 @@ app.get('/meeting', (req, res) => {
 });
 
 // SSE stream for real-time updates
-app.get('/meeting/stream', (req, res) => {
+app.get('/meeting/stream', requireBridgeAuth, (req, res) => {
   const sessionId = getMeetingSessionId(req);
   const lastEventId = req.get('Last-Event-ID') || req.query?.lastEventId || 0;
   res.setHeader('Content-Type', 'text/event-stream');
@@ -1735,7 +1858,7 @@ app.post('/meeting/clear', (req, res) => {
 });
 
 // Get current state
-app.get('/meeting/state', (req, res) => {
+app.get('/meeting/state', requireBridgeAuth, (req, res) => {
   const sessionId = getMeetingSessionId(req);
   res.json(meeting.getPublicState(sessionId));
 });
@@ -1748,6 +1871,7 @@ app.listen(PORT, HOST, () => {
   console.log(`Webhook URL: ${WEBHOOK_BASE_URL.replace(/\/$/, '')}/webhook`);
   console.log(`Health check: http://localhost:${PORT}/health`);
   console.log(`[OpenClawHook] wake=${OPENCLAW_HOOK_URL} agent=${OPENCLAW_AGENT_HOOK_URL}`);
+  console.log(`[BridgeAuth] ${BRIDGE_AUTH_ENABLED ? 'enabled' : 'disabled'}${BRIDGE_AUTH_ENABLED ? '' : ' (set BRIDGE_API_TOKEN to enforce bearer auth on bridge control routes)'}`);
   console.log(`[OpenClawHook] token=${OPENCLAW_HOOK_TOKEN ? 'set' : 'missing'} url_source=${OPENCLAW_HOOK_URL_SOURCE} token_source=${OPENCLAW_HOOK_TOKEN_SOURCE}`);
   if (!OPENCLAW_HOOK_TOKEN) {
     console.warn(`[OpenClawHook] token missing. Configure hooks.token in ${OPENCLAW_HOOK_DEFAULTS.configPath}`);
