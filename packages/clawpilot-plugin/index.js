@@ -570,8 +570,7 @@ export default function register(api) {
             if (defaultLobsterName) {
               payload.bot_name = defaultLobsterName;
             } else {
-              const agentName = inferAgentName(api, ctx);
-              if (agentName) payload.agent_name = agentName;
+              payload.bot_name = 'Lobster 🦞';
             }
           }
           const result = await callBridge(api, '/launch', { method: 'POST', body: payload });
