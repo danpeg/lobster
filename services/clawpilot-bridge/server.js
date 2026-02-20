@@ -1092,6 +1092,8 @@ function persistBridgeState(reason = 'update') {
     const payload = {
       updated_at: new Date().toISOString(),
       reason,
+      muted: IS_MUTED,
+      meetverbose: DEBUG_MODE,
       active_meeting_session_id: activeMeetingSessionId,
       active_route_target: activeRouteTarget,
       meeting_sessions: Array.from(meetingSessionByBotId.entries()).map(([botId, sessionId]) => ({
@@ -1143,6 +1145,16 @@ function loadBridgeState() {
     const parsed = safeParseJson(raw);
     if (!parsed || typeof parsed !== 'object') {
       return;
+    }
+
+    if (typeof parsed.muted === 'boolean') {
+      IS_MUTED = parsed.muted;
+    }
+    if (typeof parsed.meetverbose === 'boolean') {
+      DEBUG_MODE = parsed.meetverbose;
+    }
+    if (IS_MUTED && DEBUG_MODE) {
+      DEBUG_MODE = false;
     }
 
     meetingSessionByBotId.clear();
@@ -1238,7 +1250,7 @@ function loadBridgeState() {
     ensureSessionDefaults(activeMeetingSessionId);
 
     console.log(
-      `[BridgeState] loaded file=${BRIDGE_STATE_FILE} sessions=${meetingSessionByBotId.size} routes=${routeTargetByBotId.size} modes=${modeBySessionId.size} audiences=${audienceBySessionId.size}`
+      `[BridgeState] loaded file=${BRIDGE_STATE_FILE} sessions=${meetingSessionByBotId.size} routes=${routeTargetByBotId.size} modes=${modeBySessionId.size} audiences=${audienceBySessionId.size} muted=${IS_MUTED} meetverbose=${DEBUG_MODE}`
     );
   } catch (error) {
     console.warn(`[BridgeState] load failed file=${BRIDGE_STATE_FILE} error=${error.message}`);
@@ -1282,12 +1294,14 @@ function setMuteState(nextMuted, reason = 'manual') {
     }
   }
   console.log(`[${IS_MUTED ? 'MUTED' : 'UNMUTED'}] Transcript processing ${IS_MUTED ? 'paused' : 'resumed'} reason=${reason}`);
+  persistBridgeState(`mute:${reason}`);
   return { muted: IS_MUTED, meetverbose: DEBUG_MODE };
 }
 
 function setMeetVerboseState(nextEnabled, reason = 'manual') {
   DEBUG_MODE = Boolean(nextEnabled);
   console.log(`[MEETVERBOSE ${DEBUG_MODE ? 'ON' : 'OFF'}] Raw transcripts ${DEBUG_MODE ? 'enabled' : 'disabled'} reason=${reason}`);
+  persistBridgeState(`meetverbose:${reason}`);
   return { muted: IS_MUTED, meetverbose: DEBUG_MODE };
 }
 
