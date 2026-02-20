@@ -1,5 +1,8 @@
 const PLUGIN_ID = 'clawpilot';
 const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:3001';
+const DEFAULT_BRIDGE_PORT = '3001';
+const TAILSCALE_SIGNUP_URL = 'https://tailscale.com/';
+const TAILSCALE_DOWNLOAD_URL = 'https://tailscale.com/download';
 const HUMAN_FIRST_NAME_BY_ROUTE = new Map();
 const AUTO_JOIN_REPLY_BY_ROUTE = new Map();
 const AUTO_JOIN_REPLY_TTL_MS = 8_000;
@@ -88,6 +91,388 @@ function loadBridgeConfig(api) {
     autoJoinReplaceActive,
     blockLegacyMeetingLaunchScripts,
   };
+}
+
+function normalizeUrlNoTrailingSlash(value) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return '';
+  }
+  return `${parsed.protocol}//${parsed.host}${parsed.pathname}`.replace(/\/$/, '');
+}
+
+function isHttpsTsNetUrl(value) {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'https:' && parsed.hostname.endsWith('.ts.net');
+  } catch {
+    return false;
+  }
+}
+
+function tryParseJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function findFirstTsNetUrl(value) {
+  if (typeof value === 'string') {
+    const match = value.match(/https:\/\/[A-Za-z0-9.-]+\.ts\.net(?:\/[^\s"'`)]*)?/i);
+    return match ? normalizeUrlNoTrailingSlash(match[0]) : '';
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findFirstTsNetUrl(item);
+      if (found) return found;
+    }
+    return '';
+  }
+  if (value && typeof value === 'object') {
+    for (const item of Object.values(value)) {
+      const found = findFirstTsNetUrl(item);
+      if (found) return found;
+    }
+  }
+  return '';
+}
+
+function extractFirstHttpUrl(text) {
+  const match = String(text || '').match(/https:\/\/[^\s"'`]+/i);
+  return match ? match[0] : '';
+}
+
+function tailOutput(value, maxChars = 260) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (text.length <= maxChars) return text;
+  return text.slice(0, maxChars - 3).trimEnd() + '...';
+}
+
+async function runSystemCommand(api, argv, timeoutMs = 10_000) {
+  try {
+    const result = await api.runtime.system.runCommandWithTimeout(argv, {
+      timeoutMs,
+      noOutputTimeoutMs: timeoutMs,
+    });
+    const stdout = String(result?.stdout || '').trim();
+    const stderr = String(result?.stderr || '').trim();
+    return {
+      ok: Number(result?.code) === 0,
+      code: result?.code,
+      stdout,
+      stderr,
+      combined: [stdout, stderr].filter(Boolean).join('\n').trim(),
+    };
+  } catch (err) {
+    const message = tailOutput(err?.message || err);
+    return { ok: false, code: null, stdout: '', stderr: message, combined: message };
+  }
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 8_000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function probeBridgeHealth(baseUrl) {
+  const normalizedBase = normalizeUrlNoTrailingSlash(baseUrl);
+  if (!normalizedBase) {
+    return { ok: false, code: 0, url: '', reason: 'invalid base URL' };
+  }
+  const healthUrl = `${normalizedBase}/health`;
+  try {
+    const res = await fetchWithTimeout(healthUrl, { method: 'GET' });
+    const code = Number(res.status || 0);
+    const raw = await res.text();
+    const body = tryParseJson(raw);
+    const bodyOk = body && body.status === 'ok' && body.hook && body.prompt;
+    return { ok: code === 200 && Boolean(bodyOk), code, url: healthUrl, reason: bodyOk ? '' : 'unexpected health body' };
+  } catch (err) {
+    return { ok: false, code: 0, url: healthUrl, reason: tailOutput(err?.message || err) || 'request failed' };
+  }
+}
+
+async function probeBridgeAuth(baseUrl, bridgeToken) {
+  const normalizedBase = normalizeUrlNoTrailingSlash(baseUrl);
+  if (!normalizedBase) {
+    return { unauthCode: 0, authCode: 0, reason: 'invalid base URL' };
+  }
+  const statusUrl = `${normalizedBase}/copilot/status`;
+  let unauthCode = 0;
+  let authCode = 0;
+  let reason = '';
+  try {
+    const unauthRes = await fetchWithTimeout(statusUrl, { method: 'GET' });
+    unauthCode = Number(unauthRes.status || 0);
+    await unauthRes.text();
+  } catch (err) {
+    reason = tailOutput(err?.message || err) || 'unauth probe failed';
+    return { unauthCode, authCode, reason };
+  }
+
+  if (bridgeToken) {
+    try {
+      const authRes = await fetchWithTimeout(statusUrl, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${bridgeToken}` },
+      });
+      authCode = Number(authRes.status || 0);
+      await authRes.text();
+    } catch (err) {
+      reason = tailOutput(err?.message || err) || 'auth probe failed';
+    }
+  }
+
+  return { unauthCode, authCode, reason };
+}
+
+function cloneObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return { ...value };
+}
+
+async function updateClawpilotPluginConfig(api, patch) {
+  const cfg = api.runtime.config.loadConfig() || {};
+  const plugins = cloneObject(cfg.plugins);
+  const entries = cloneObject(plugins.entries);
+  const pluginEntry = cloneObject(entries[PLUGIN_ID]);
+  const pluginConfig = cloneObject(pluginEntry.config);
+  const nextPluginConfig = { ...pluginConfig, ...patch };
+  const nextCfg = {
+    ...cfg,
+    plugins: {
+      ...plugins,
+      entries: {
+        ...entries,
+        [PLUGIN_ID]: {
+          ...pluginEntry,
+          config: nextPluginConfig,
+        },
+      },
+    },
+  };
+  await api.runtime.config.writeConfigFile(nextCfg);
+  return nextPluginConfig;
+}
+
+function parseConnectArgs(raw) {
+  const normalized = String(raw || '').trim().replace(/[–—―−]/g, '-');
+  if (!normalized) return { bridgeUrl: '', bridgeToken: '' };
+  const urlMatch = normalized.match(/https?:\/\/[^\s<>"']+/i);
+  const bridgeUrl = urlMatch ? urlMatch[0] : '';
+  const tokenMatch = normalized.match(/(?:^|\s)(?:--token|-t)\s+(?:"([^"]+)"|'([^']+)'|(\S+))/i);
+  let bridgeToken = '';
+  if (tokenMatch) {
+    bridgeToken = tokenMatch[1] || tokenMatch[2] || tokenMatch[3] || '';
+  } else {
+    const parts = normalized.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2 && parts[0].startsWith('http')) {
+      bridgeToken = parts[1];
+    }
+  }
+  return { bridgeUrl, bridgeToken: bridgeToken.trim() };
+}
+
+function buildTailscalePrimerLines() {
+  return [
+    'Why ClawPilot uses Tailscale Funnel:',
+    '- It gives each user a private, stable HTTPS endpoint (`*.ts.net`) without opening random public ports.',
+    '- Funnel keeps webhook routing predictable and safer for non-dev setup.',
+    '',
+    'How to sign up for Tailscale:',
+    `1) Create account: ${TAILSCALE_SIGNUP_URL}`,
+    `2) Install app: ${TAILSCALE_DOWNLOAD_URL}`,
+    '3) Sign in once on this OpenClaw host, then rerun /clawpilot setup.',
+  ];
+}
+
+async function runSetupAssistant(api) {
+  const lines = [
+    'ClawPilot setup assistant',
+    'I will show each onboarding step so you can see exactly what I am checking.',
+    '',
+    ...buildTailscalePrimerLines(),
+    '',
+  ];
+
+  const current = loadBridgeConfig(api);
+  lines.push(`Step 1/7: Read plugin config -> bridgeBaseUrl=${current.bridgeBaseUrl}`);
+  lines.push(`Step 1/7: bridgeToken is ${current.bridgeToken ? 'set' : 'missing'}`);
+
+  const tailscaleVersion = await runSystemCommand(api, ['tailscale', 'version']);
+  if (!tailscaleVersion.ok) {
+    lines.push('');
+    lines.push('Step 2/7: Tailscale CLI check -> FAILED');
+    lines.push('I could not run `tailscale version` on this host.');
+    lines.push('Install/sign in to Tailscale, then rerun /clawpilot setup.');
+    lines.push(`Debug: ${tailOutput(tailscaleVersion.combined || tailscaleVersion.stderr || 'command not available')}`);
+    return lines.join('\n');
+  }
+  lines.push('Step 2/7: Tailscale CLI check -> OK');
+
+  let signedIn = false;
+  const statusJson = await runSystemCommand(api, ['tailscale', 'status', '--json']);
+  if (statusJson.ok) {
+    const parsed = tryParseJson(statusJson.stdout);
+    const backendState = String(parsed?.BackendState || '').toLowerCase();
+    signedIn = backendState === 'running';
+  }
+
+  if (!signedIn) {
+    lines.push('Step 3/7: Tailscale auth state -> not signed in yet');
+    const tailscaleUp = await runSystemCommand(api, ['tailscale', 'up'], 30_000);
+    const authUrl = extractFirstHttpUrl(tailscaleUp.combined);
+    if (authUrl) {
+      lines.push(`Open this sign-in link, complete login, then rerun /clawpilot setup:\n${authUrl}`);
+    } else {
+      lines.push('I could not auto-finish Tailscale login from chat.');
+      lines.push('Please open Tailscale app on this host and sign in, then rerun /clawpilot setup.');
+    }
+    return lines.join('\n');
+  }
+  lines.push('Step 3/7: Tailscale auth state -> signed in');
+
+  let funnelUrl = '';
+  const funnelStatusJson = await runSystemCommand(api, ['tailscale', 'funnel', 'status', '--json']);
+  if (funnelStatusJson.ok) {
+    funnelUrl = findFirstTsNetUrl(tryParseJson(funnelStatusJson.stdout));
+    if (!funnelUrl) funnelUrl = findFirstTsNetUrl(funnelStatusJson.combined);
+  }
+  if (!funnelUrl) {
+    const funnelStatusText = await runSystemCommand(api, ['tailscale', 'funnel', 'status']);
+    funnelUrl = findFirstTsNetUrl(funnelStatusText.combined);
+  }
+
+  if (!funnelUrl) {
+    lines.push(`Step 4/7: Funnel status -> missing. Trying to enable funnel on port ${DEFAULT_BRIDGE_PORT}...`);
+    await runSystemCommand(api, ['tailscale', 'funnel', DEFAULT_BRIDGE_PORT], 20_000);
+    const retry = await runSystemCommand(api, ['tailscale', 'funnel', 'status', '--json']);
+    if (retry.ok) funnelUrl = findFirstTsNetUrl(tryParseJson(retry.stdout)) || findFirstTsNetUrl(retry.combined);
+  }
+
+  if (!funnelUrl || !isHttpsTsNetUrl(funnelUrl)) {
+    lines.push('Step 4/7: Funnel URL discovery -> FAILED');
+    lines.push('I could not find a valid `https://*.ts.net` Funnel URL for this host.');
+    lines.push('Enable Funnel for bridge port 3001 in Tailscale, then rerun /clawpilot setup.');
+    return lines.join('\n');
+  }
+  lines.push(`Step 4/7: Funnel URL discovery -> OK (${funnelUrl})`);
+
+  const funnelHealth = await probeBridgeHealth(funnelUrl);
+  if (!funnelHealth.ok) {
+    lines.push('Step 5/7: Funnel -> bridge health check -> FAILED');
+    lines.push(`Checked ${funnelHealth.url || `${funnelUrl}/health`} and did not get expected bridge health response.`);
+    lines.push(`Reason: ${funnelHealth.reason || `HTTP ${funnelHealth.code}`}`);
+    lines.push('Start the bridge service, confirm Funnel points to port 3001, then rerun /clawpilot setup.');
+    return lines.join('\n');
+  }
+  lines.push('Step 5/7: Funnel -> bridge health check -> OK');
+
+  let bridgeToken = current.bridgeToken;
+  if (!bridgeToken) {
+    const envToken = await runSystemCommand(api, ['printenv', 'BRIDGE_API_TOKEN']);
+    const candidate = String(envToken.stdout || '').trim();
+    if (candidate) {
+      bridgeToken = candidate;
+      lines.push('Step 6/7: Bridge token auto-discovery -> found BRIDGE_API_TOKEN in runtime environment');
+    } else {
+      lines.push('Step 6/7: Bridge token auto-discovery -> not found in runtime environment');
+    }
+  } else {
+    lines.push('Step 6/7: Bridge token -> already configured');
+  }
+
+  await updateClawpilotPluginConfig(api, {
+    bridgeBaseUrl: funnelUrl,
+    ...(bridgeToken ? { bridgeToken } : {}),
+  });
+  lines.push('Step 7/7: Saved plugin bridge config');
+
+  const authProbe = await probeBridgeAuth(funnelUrl, bridgeToken);
+  if (authProbe.unauthCode === 401 && authProbe.authCode === 200) {
+    lines.push('Preflight: auth alignment OK (unauth 401 + auth 200).');
+    lines.push('✅ Setup complete. You can now run /clawpilot status or /clawpilot join.');
+    return lines.join('\n');
+  }
+  if (authProbe.unauthCode === 200) {
+    lines.push('Preflight: bridge auth appears disabled (unauth 200).');
+    lines.push('✅ Bridge is reachable. You can run /clawpilot status.');
+    return lines.join('\n');
+  }
+  if (authProbe.unauthCode === 401 && !bridgeToken) {
+    lines.push('Preflight: bridge auth is enabled, but plugin still has no bridge token.');
+    lines.push('Run this in chat once you have the bridge token:');
+    lines.push(`/clawpilot connect ${funnelUrl} --token <BRIDGE_API_TOKEN>`);
+    return lines.join('\n');
+  }
+
+  lines.push(`Preflight: bridge auth check incomplete (unauth=${authProbe.unauthCode || 0}, auth=${authProbe.authCode || 0}).`);
+  if (authProbe.reason) lines.push(`Reason: ${authProbe.reason}`);
+  lines.push('If needed, run:');
+  lines.push(`/clawpilot connect ${funnelUrl} --token <BRIDGE_API_TOKEN>`);
+  return lines.join('\n');
+}
+
+async function runConnectAssistant(api, rawArgs) {
+  const lines = [
+    'ClawPilot connect assistant',
+    'Applying bridge connection settings from chat and validating them.',
+    '',
+  ];
+  const parsed = parseConnectArgs(rawArgs);
+  const current = loadBridgeConfig(api);
+  const bridgeUrl = parsed.bridgeUrl || current.bridgeBaseUrl;
+  const bridgeToken = parsed.bridgeToken || current.bridgeToken;
+
+  if (!bridgeUrl) {
+    lines.push('Missing bridge URL.');
+    lines.push('Usage: /clawpilot connect https://<your-node>.ts.net --token <BRIDGE_API_TOKEN>');
+    return lines.join('\n');
+  }
+  if (!isHttpsTsNetUrl(bridgeUrl)) {
+    lines.push(`Invalid bridge URL: ${bridgeUrl}`);
+    lines.push('For supported onboarding, URL must be `https://*.ts.net`.');
+    return lines.join('\n');
+  }
+
+  lines.push(`Step 1/3: bridge URL accepted (${bridgeUrl})`);
+  lines.push(`Step 2/3: bridge token is ${bridgeToken ? 'provided/set' : 'missing'}`);
+
+  await updateClawpilotPluginConfig(api, {
+    bridgeBaseUrl: bridgeUrl,
+    ...(bridgeToken ? { bridgeToken } : {}),
+  });
+  lines.push('Step 3/3: saved plugin bridge config');
+
+  const authProbe = await probeBridgeAuth(bridgeUrl, bridgeToken);
+  if (authProbe.unauthCode === 401 && authProbe.authCode === 200) {
+    lines.push('Preflight: auth alignment OK (unauth 401 + auth 200).');
+    lines.push('✅ Connect complete.');
+    return lines.join('\n');
+  }
+  if (authProbe.unauthCode === 200) {
+    lines.push('Preflight: bridge reachable and auth is not enforced (unauth 200).');
+    lines.push('✅ Connect complete.');
+    return lines.join('\n');
+  }
+  if (authProbe.unauthCode === 401 && !bridgeToken) {
+    lines.push('Bridge auth is enabled (401), but no token was provided.');
+    lines.push('Run: /clawpilot connect https://<your-node>.ts.net --token <BRIDGE_API_TOKEN>');
+    return lines.join('\n');
+  }
+  lines.push(`Preflight failed (unauth=${authProbe.unauthCode || 0}, auth=${authProbe.authCode || 0}).`);
+  if (authProbe.reason) lines.push(`Reason: ${authProbe.reason}`);
+  return lines.join('\n');
 }
 
 function extractMeetingUrl(text) {
@@ -273,6 +658,13 @@ function buildHelpText() {
     '/clawpilot help',
     '  Show available commands and examples.',
     '',
+    '/clawpilot setup',
+    '  Chat-only onboarding assistant (checks Tailscale, Funnel, bridge reachability, and token alignment).',
+    '  Includes transparent step-by-step progress and signup guidance.',
+    '',
+    '/clawpilot connect <bridge_url> --token <BRIDGE_API_TOKEN>',
+    '  Save bridge URL/token from chat and validate auth alignment.',
+    '',
     '/clawpilot status',
     '  Show bridge + copilot status.',
     '',
@@ -307,6 +699,8 @@ function buildHelpText() {
     '  Owner-only one-time reveal grant for shared mode.',
     '',
     'Examples:',
+    '/clawpilot setup',
+    '/clawpilot connect https://your-node.ts.net --token <BRIDGE_API_TOKEN>',
     '/clawpilot join https://meet.google.com/abc-defg-hij',
     '/clawpilot join https://meet.google.com/abc-defg-hij --name "Sunny Note Taker"',
     '/clawpilot transcript on',
@@ -612,11 +1006,13 @@ function buildBridgeUnauthorizedMessage(bridgeToken) {
     return [
       'Bridge authentication is enabled, but plugin bridgeToken is not configured.',
       'Set plugins.entries.clawpilot.config.bridgeToken to match BRIDGE_API_TOKEN, then restart OpenClaw daemon.',
+      'For chat-only onboarding, run /clawpilot setup or /clawpilot connect <bridge_url> --token <BRIDGE_API_TOKEN>.',
     ].join(' ');
   }
   return [
     'Bridge authentication failed (401): configured plugin bridgeToken was rejected.',
     'Re-sync plugins.entries.clawpilot.config.bridgeToken with BRIDGE_API_TOKEN (token may have rotated), then restart OpenClaw daemon.',
+    'For chat-only onboarding, run /clawpilot setup.',
   ].join(' ');
 }
 
@@ -645,7 +1041,7 @@ async function callBridge(api, path, options = 'GET') {
   } catch (err) {
     const causeCode = err?.cause?.code ? ` (${err.cause.code})` : '';
     throw new Error(
-      `Bridge is unreachable at ${bridgeBaseUrl}${path}${causeCode}. Verify bridgeBaseUrl, ensure bridge service is running, and confirm Tailscale Funnel points to this bridge (/health).`
+      `Bridge is unreachable at ${bridgeBaseUrl}${path}${causeCode}. Verify bridgeBaseUrl, ensure bridge service is running, and confirm Tailscale Funnel points to this bridge (/health). Run /clawpilot setup for guided chat onboarding.`
     );
   }
 
@@ -751,7 +1147,7 @@ export default function register(api) {
 
   api.registerCommand({
     name: 'clawpilot',
-    description: 'Control ClawPilot: help | status | join | pause | resume | transcript | mode | audience | privacy | reveal',
+    description: 'Control ClawPilot: help | setup | connect | status | join | pause | resume | transcript | mode | audience | privacy | reveal',
     acceptsArgs: true,
     handler: async (ctx) => {
       const rawArgs = (ctx.args || '').trim();
@@ -762,6 +1158,14 @@ export default function register(api) {
       try {
         if (!action || action === 'help') {
           return { text: buildHelpText() };
+        }
+
+        if (action === 'setup') {
+          return { text: await runSetupAssistant(api) };
+        }
+
+        if (action === 'connect') {
+          return { text: await runConnectAssistant(api, actionArgs) };
         }
 
         if (action === 'status') {
@@ -905,7 +1309,13 @@ export default function register(api) {
           ].join('\n'),
         };
       } catch (err) {
-        return { text: `ClawPilot command failed: ${err.message}` };
+        const message = String(err?.message || err || 'unknown error');
+        if (/bridge is unreachable|authentication failed|bridgeToken/i.test(message)) {
+          return {
+            text: `ClawPilot command failed: ${message}\n\nTry chat-only onboarding:\n/clawpilot setup`,
+          };
+        }
+        return { text: `ClawPilot command failed: ${message}` };
       }
     },
   });

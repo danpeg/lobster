@@ -32,6 +32,7 @@ npm start
 ## Tailscale Funnel Enforcement
 
 - Install/reinstall/update is hard-blocked unless Funnel is correctly aligned to bridge.
+- End-user onboarding can run from chat via `/clawpilot setup` (no terminal required for normal path).
 - Required checks:
   - local `GET /health` returns `200`
   - public `${WEBHOOK_BASE_URL}/health` returns `200` with expected bridge shape

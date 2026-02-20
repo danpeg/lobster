@@ -20,6 +20,22 @@ openclaw daemon restart
 openclaw plugins info clawpilot
 ```
 
+## Chat-Only Onboarding (WhatsApp/Telegram/Discord)
+
+After install, run in chat:
+
+```text
+/clawpilot setup
+```
+
+The setup assistant now explains:
+
+1. Why ClawPilot uses Tailscale Funnel (`https://*.ts.net`) for safer/stable bridge routing.
+2. How to sign up/install Tailscale (links included in chat).
+3. Step-by-step checks (Tailscale login, Funnel URL, bridge health, auth alignment).
+
+No terminal is required for the normal user path.
+
 ## Configure Runtime (Required)
 
 Bootstrap your env file:
