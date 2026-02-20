@@ -2,7 +2,15 @@ const PLUGIN_ID = 'clawpilot';
 const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:3001';
 const HUMAN_FIRST_NAME_BY_ROUTE = new Map();
 const AUTO_JOIN_REPLY_BY_ROUTE = new Map();
-const AUTO_JOIN_REPLY_TTL_MS = 60_000;
+const AUTO_JOIN_REPLY_TTL_MS = 8_000;
+const LEGACY_MEETING_LAUNCH_BLOCK_REASON =
+  'Meeting launch is managed by ClawPilot plugin/bridge. Use /clawpilot join or paste URL.';
+const LEGACY_MEETING_LAUNCH_PATTERNS = [
+  /(?:^|\/)auto-launch-from-text\.sh(?:\s|$)/i,
+  /(?:^|\/)launch-bot\.sh(?:\s|$)/i,
+  /\/root\/\.openclaw\/recall-webhook\/services\/clawpilot-bridge\//i,
+  /\/root\/openclaw-meeting-copilot\/.*launch-bot\.sh/i,
+];
 
 function sanitizeAgentName(value) {
   const normalized = String(value || '')
@@ -68,7 +76,17 @@ function loadBridgeConfig(api) {
   const bridgeBaseUrl = normalizeBridgeBaseUrl(pluginCfg.bridgeBaseUrl || DEFAULT_BRIDGE_URL, allowRemoteBridge);
   const bridgeToken = pluginCfg.bridgeToken || '';
   const teamAgent = Boolean(pluginCfg.teamAgent);
-  return { bridgeBaseUrl, bridgeToken, teamAgent };
+  const autoJoinMeetingLinks = pluginCfg.autoJoinMeetingLinks !== false;
+  const autoJoinReplaceActive = Boolean(pluginCfg.autoJoinReplaceActive);
+  const blockLegacyMeetingLaunchScripts = pluginCfg.blockLegacyMeetingLaunchScripts !== false;
+  return {
+    bridgeBaseUrl,
+    bridgeToken,
+    teamAgent,
+    autoJoinMeetingLinks,
+    autoJoinReplaceActive,
+    blockLegacyMeetingLaunchScripts,
+  };
 }
 
 function extractMeetingUrl(text) {
@@ -123,6 +141,7 @@ function buildRouteLookupKeyFromMessageContext(ctx, event = null) {
 }
 
 function queueAutoJoinReply(routeKey, text) {
+  pruneExpiredAutoJoinReplies();
   if (!routeKey) return;
   const content = String(text || '').trim();
   if (!content) return;
@@ -133,12 +152,21 @@ function queueAutoJoinReply(routeKey, text) {
 }
 
 function consumeAutoJoinReply(routeKey) {
+  pruneExpiredAutoJoinReplies();
   if (!routeKey) return '';
   const item = AUTO_JOIN_REPLY_BY_ROUTE.get(routeKey);
   if (!item) return '';
   AUTO_JOIN_REPLY_BY_ROUTE.delete(routeKey);
   if (!item.content || item.expiresAt < Date.now()) return '';
   return item.content;
+}
+
+function pruneExpiredAutoJoinReplies(nowMs = Date.now()) {
+  for (const [routeKey, item] of AUTO_JOIN_REPLY_BY_ROUTE.entries()) {
+    if (!item?.content || !Number.isFinite(item.expiresAt) || item.expiresAt <= nowMs) {
+      AUTO_JOIN_REPLY_BY_ROUTE.delete(routeKey);
+    }
+  }
 }
 
 function isDirectMeetingJoinText(text, meetingUrl) {
@@ -418,6 +446,53 @@ function buildOwnerBindingFromHook(event, ctx, routeTarget) {
   return ownerBinding;
 }
 
+function extractToolNameFromHook(event) {
+  return sanitizeAgentName(
+    event?.toolName || event?.tool_name || event?.name || event?.tool?.name || event?.payload?.toolName || '',
+  ).toLowerCase();
+}
+
+function stringifyCommandCandidate(value) {
+  if (typeof value === 'string') return value.trim();
+  if (Array.isArray(value)) return value.map(stringifyCommandCandidate).filter(Boolean).join(' ').trim();
+  if (value && typeof value === 'object') {
+    for (const key of ['command', 'cmd', 'input', 'text']) {
+      if (typeof value[key] === 'string' && value[key].trim()) return value[key].trim();
+    }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return '';
+    }
+  }
+  return '';
+}
+
+function extractExecCommandFromHook(event, ctx) {
+  const candidates = [
+    event?.command,
+    event?.cmd,
+    event?.args,
+    event?.arguments,
+    event?.toolInput,
+    event?.input,
+    event?.payload,
+    ctx?.command,
+    ctx?.args,
+  ];
+  for (const candidate of candidates) {
+    const command = stringifyCommandCandidate(candidate);
+    if (command) return command;
+  }
+  return '';
+}
+
+function isLegacyMeetingLaunchCommand(rawCommand) {
+  const command = String(rawCommand || '');
+  if (!command) return false;
+  return LEGACY_MEETING_LAUNCH_PATTERNS.some((pattern) => pattern.test(command));
+}
+
 function looksLikeStartupPreferenceText(text) {
   const normalized = String(text || '').trim().toLowerCase();
   if (!normalized) return false;
@@ -538,21 +613,49 @@ async function callBridge(api, path, options = 'GET') {
 }
 
 export default function register(api) {
+  api.on('before_tool_call', (event, ctx) => {
+    try {
+      const { blockLegacyMeetingLaunchScripts } = loadBridgeConfig(api);
+      if (!blockLegacyMeetingLaunchScripts) return;
+
+      const toolName = extractToolNameFromHook(event);
+      if (toolName !== 'exec') return;
+
+      const rawCommand = extractExecCommandFromHook(event, ctx);
+      if (!isLegacyMeetingLaunchCommand(rawCommand)) return;
+
+      api.logger.warn(`[ClawPilot] blocked legacy meeting launch exec: ${rawCommand.slice(0, 240)}`);
+      return {
+        block: true,
+        blockReason: LEGACY_MEETING_LAUNCH_BLOCK_REASON,
+      };
+    } catch (err) {
+      api.logger.warn(`[ClawPilot] legacy launch guard failed: ${err.message}`);
+      return;
+    }
+  });
+
   api.on('message_received', async (event, ctx) => {
     try {
+      pruneExpiredAutoJoinReplies();
       const text = String(event?.content || '').trim();
       const routeTarget = buildRouteTargetFromHook(event, ctx);
       rememberHumanFirstName(ctx, event, routeTarget);
       const autoJoinArgs = parseJoinArgs(text);
+      const { autoJoinMeetingLinks, autoJoinReplaceActive, teamAgent } = loadBridgeConfig(api);
       if (
+        autoJoinMeetingLinks &&
         autoJoinArgs.meetingUrl &&
         isDirectMeetingJoinText(text, autoJoinArgs.meetingUrl) &&
         !text.startsWith('/clawpilot')
       ) {
         try {
           const ownerBinding = buildOwnerBindingFromHook(event, ctx, routeTarget);
-          const { teamAgent } = loadBridgeConfig(api);
-          const payload = { meeting_url: autoJoinArgs.meetingUrl, team_agent: teamAgent };
+          const payload = {
+            meeting_url: autoJoinArgs.meetingUrl,
+            team_agent: teamAgent,
+            replace_active: autoJoinReplaceActive,
+          };
           if (routeTarget) payload.route_target = routeTarget;
           if (ownerBinding) payload.owner_binding = ownerBinding;
           if (autoJoinArgs.botName) {
@@ -587,6 +690,7 @@ export default function register(api) {
   });
 
   api.on('message_sending', (event, ctx) => {
+    pruneExpiredAutoJoinReplies();
     const routeKey = buildRouteLookupKeyFromMessageContext(ctx, event);
     const queued = consumeAutoJoinReply(routeKey);
     if (!queued) return;

@@ -25,6 +25,18 @@
       "allowRemoteBridge": {
         "type": "boolean",
         "description": "Allow non-private bridge hosts. Keep false unless you explicitly trust a remote endpoint."
+      },
+      "autoJoinMeetingLinks": {
+        "type": "boolean",
+        "description": "Automatically launch a meeting bot when a plain meeting URL is posted."
+      },
+      "autoJoinReplaceActive": {
+        "type": "boolean",
+        "description": "When auto-join is triggered from a plain URL, replace an already active bot."
+      },
+      "blockLegacyMeetingLaunchScripts": {
+        "type": "boolean",
+        "description": "Block model exec attempts that call legacy meeting-launch shell scripts."
       }
     }
   },
@@ -48,6 +60,18 @@
     "allowRemoteBridge": {
       "label": "Allow Remote Bridge",
       "help": "Off by default. Enable only for trusted non-private endpoints."
+    },
+    "autoJoinMeetingLinks": {
+      "label": "Auto-Join Meeting Links",
+      "help": "On by default. Plain meeting URLs trigger /launch through bridge."
+    },
+    "autoJoinReplaceActive": {
+      "label": "Auto-Join Replaces Active Bot",
+      "help": "Off by default. Keep off to avoid duplicate URL posts replacing the active bot."
+    },
+    "blockLegacyMeetingLaunchScripts": {
+      "label": "Block Legacy Launch Scripts",
+      "help": "On by default. Prevents model exec calls from running old launch script paths."
     }
   }
 }
