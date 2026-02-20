@@ -719,6 +719,12 @@ const PROACTIVITY_PRESETS = {
   normal: { reactionCooldownMs: 2400, partialDebounceMs: 3200, minNewWords: 14, partialMinNewWords: 12, partialContextWindow: 10, finalContextWindow: 12 },
   high: { reactionCooldownMs: 1100, partialDebounceMs: 1800, minNewWords: 8, partialMinNewWords: 6, partialContextWindow: 12, finalContextWindow: 14 }
 };
+const COPILOT_RESPONSE_REQUIREMENT = [
+  '[RESPONSE REQUIREMENT]',
+  'Reply now with exactly one short, helpful message to the host.',
+  'If transcript is unclear, briefly say you are listening and ask one concise clarifying question.',
+  'Never return an empty response.'
+].join('\n');
 const selectedProactivity = PROACTIVITY_PRESETS[PROACTIVITY_LEVEL] || PROACTIVITY_PRESETS.high;
 const REACT_ON_PARTIAL = parseBooleanLike(process.env.REACT_ON_PARTIAL, false);
 const REACTION_COOLDOWN_MS = parseIntegerLike(process.env.REACTION_COOLDOWN_MS, selectedProactivity.reactionCooldownMs); // Finals
@@ -2619,7 +2625,7 @@ async function sendToOpenClaw(message, options = {}) {
   const sessionId = ensureSessionDefaults(options.sessionId || activeMeetingSessionId);
   const routeTarget = resolveRouteTarget(options.routeTarget, options.botId);
   const routeText = formatRouteText(routeTarget, 'wake');
-  const text = `[MEETING TRANSCRIPT]\n${message}`;
+  const text = `[MEETING TRANSCRIPT]\n${message}\n\n${COPILOT_RESPONSE_REQUIREMENT}`;
   let direct = null;
   try {
     // Routed delivery via OpenClaw hooks may resolve to NO_REPLY. Use the CLI pipeline first so
