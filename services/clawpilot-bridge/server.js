@@ -164,6 +164,12 @@ const LOBSTER_PROMPT_PATH = path.resolve(
 );
 const promptManager = createPromptManager({ promptPath: LOBSTER_PROMPT_PATH });
 const ALLOWED_REVEAL_CATEGORIES = new Set(['commitments', 'contacts', 'context', 'notes']);
+const DEFAULT_MEETING_START_PROMPT = [
+  '**Welcome.**',
+  'I am here and tracking decisions, owners, blockers, and follow-ups.',
+  'What should we make sure gets decided before we wrap?'
+].join('\n');
+let cachedMeetingStartPrompt = null;
 
 if (DISCORD_DIRECT_DELIVERY && !DISCORD_BOT_TOKEN) {
   console.warn('[DiscordDirect] DISCORD_DIRECT_DELIVERY enabled but Discord bot token was not found in openclaw.json. Falling back to OpenClaw hooks.');
@@ -228,6 +234,47 @@ function splitDiscordMessage(content, maxChars = DISCORD_MAX_MESSAGE_CHARS) {
     chunks.push(remaining);
   }
   return chunks.filter((chunk) => chunk.length > 0);
+}
+
+function extractPromptSection(raw, sectionName) {
+  const target = String(sectionName || '').trim();
+  if (!target) return '';
+  const lines = String(raw || '').split(/\r?\n/);
+  let capturing = false;
+  const bucket = [];
+  for (const line of lines) {
+    const header = line.match(/^##\s+(.+?)\s*$/);
+    if (header) {
+      if (capturing) break;
+      capturing = String(header[1] || '').trim() === target;
+      continue;
+    }
+    if (capturing) bucket.push(line);
+  }
+  return bucket.join('\n').trim();
+}
+
+function normalizeMeetingStartTemplate(section) {
+  const lines = String(section || '').split(/\r?\n/);
+  const templateLine = lines.findIndex((line) => /^Use this template:\s*$/i.test(String(line).trim()));
+  const candidate = templateLine >= 0 ? lines.slice(templateLine + 1) : lines.filter((line) => !String(line).trim().startsWith('- '));
+  return candidate.join('\n').trim();
+}
+
+function getMeetingStartPromptTemplate() {
+  if (typeof cachedMeetingStartPrompt === 'string') {
+    return cachedMeetingStartPrompt;
+  }
+  try {
+    const promptPath = promptManager.getPromptPath();
+    const raw = fs.readFileSync(promptPath, 'utf8');
+    const section = extractPromptSection(raw, 'MEETING_START_PROMPT');
+    const template = normalizeMeetingStartTemplate(section);
+    cachedMeetingStartPrompt = template || DEFAULT_MEETING_START_PROMPT;
+  } catch {
+    cachedMeetingStartPrompt = DEFAULT_MEETING_START_PROMPT;
+  }
+  return cachedMeetingStartPrompt;
 }
 
 function getDiscordRetryDelayMs(response, parsedBody, attempt) {
@@ -916,14 +963,19 @@ function applyPrivacyOutputGuard(text, sessionId) {
   };
 }
 
-async function announceMeetingState(botId, sessionId) {
+function buildMeetingStartMessage(sessionId) {
   const normalized = ensureSessionDefaults(sessionId);
-  const message = [
-    `[MEETING CONTROL] ${getSessionCopilotName(normalized)} is ready.`,
-    `Mode: ${getSessionMode(normalized)}.`,
-    `Privacy audience: ${getSessionAudience(normalized)}.`,
-    'Commands: /clawpilot mode <name> | /clawpilot audience private|shared | /clawpilot privacy'
-  ].join(' ');
+  const template = getMeetingStartPromptTemplate();
+  const rendered = template
+    .replaceAll('{{COPILOT_NAME}}', getSessionCopilotName(normalized))
+    .replaceAll('{{ACTIVE_MODE}}', getSessionMode(normalized))
+    .replaceAll('{{ACTIVE_AUDIENCE}}', getSessionAudience(normalized))
+    .trim();
+  return rendered || DEFAULT_MEETING_START_PROMPT;
+}
+
+async function announceMeetingState(botId, sessionId) {
+  const message = buildMeetingStartMessage(sessionId);
   await sendVerboseMirrorToOpenClaw(message, { botId });
 }
 
