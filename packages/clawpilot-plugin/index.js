@@ -596,6 +596,30 @@ function formatPrivacyStatus(response) {
   ].join('\n');
 }
 
+function formatBridgeErrorBody(responseBody) {
+  if (typeof responseBody === 'string') {
+    return responseBody.slice(0, 500);
+  }
+  try {
+    return JSON.stringify(responseBody).slice(0, 500);
+  } catch {
+    return String(responseBody).slice(0, 500);
+  }
+}
+
+function buildBridgeUnauthorizedMessage(bridgeToken) {
+  if (!bridgeToken) {
+    return [
+      'Bridge authentication is enabled, but plugin bridgeToken is not configured.',
+      'Set plugins.entries.clawpilot.config.bridgeToken to match BRIDGE_API_TOKEN, then restart OpenClaw daemon.',
+    ].join(' ');
+  }
+  return [
+    'Bridge authentication failed (401): configured plugin bridgeToken was rejected.',
+    'Re-sync plugins.entries.clawpilot.config.bridgeToken with BRIDGE_API_TOKEN (token may have rotated), then restart OpenClaw daemon.',
+  ].join(' ');
+}
+
 async function callBridge(api, path, options = 'GET') {
   let method = 'GET';
   let body;
@@ -615,7 +639,16 @@ async function callBridge(api, path, options = 'GET') {
     request.body = JSON.stringify(body);
   }
 
-  const res = await fetch(`${bridgeBaseUrl}${path}`, request);
+  let res;
+  try {
+    res = await fetch(`${bridgeBaseUrl}${path}`, request);
+  } catch (err) {
+    const causeCode = err?.cause?.code ? ` (${err.cause.code})` : '';
+    throw new Error(
+      `Bridge is unreachable at ${bridgeBaseUrl}${path}${causeCode}. Verify bridgeBaseUrl, ensure bridge service is running, and confirm Tailscale Funnel points to this bridge (/health).`
+    );
+  }
+
   const text = await res.text();
   let responseBody = text;
   try {
@@ -623,7 +656,10 @@ async function callBridge(api, path, options = 'GET') {
   } catch {}
 
   if (!res.ok) {
-    throw new Error(`Bridge call failed (${res.status}): ${typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)}`);
+    if (res.status === 401) {
+      throw new Error(buildBridgeUnauthorizedMessage(bridgeToken));
+    }
+    throw new Error(`Bridge call failed (${res.status}): ${formatBridgeErrorBody(responseBody)}`);
   }
   return responseBody;
 }

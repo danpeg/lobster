@@ -10,7 +10,7 @@ ClawPilot connects Recall.ai live transcripts to OpenClaw so your copilot can re
 2. OpenClaw model/channel auth already configured
 3. Node.js 18+ on the bridge host
 4. Recall.ai account and API key
-5. Public HTTPS URL for Recall webhooks
+5. Active Tailscale Funnel URL that routes to bridge (`https://<node>.ts.net`)
 
 ## Install ClawPilot Plugin
 
@@ -32,12 +32,18 @@ npm install
 npm start
 ```
 
+Bootstrap enforces Funnel alignment and fails fast unless:
+
+1. `WEBHOOK_BASE_URL` is `https://*.ts.net`
+2. Local bridge `/health` is reachable
+3. Public Funnel `/health` reaches the same bridge
+
 Required environment variables:
 
 1. `RECALL_API_KEY`
 2. `RECALL_API_BASE` (match your Recall workspace region)
 3. `WEBHOOK_SECRET`
-4. `WEBHOOK_BASE_URL`
+4. `WEBHOOK_BASE_URL` (required `https://*.ts.net` for supported install/reinstall/update)
 5. `BRIDGE_API_TOKEN` (strongly recommended; bearer token for bridge control routes)
 
 OpenClaw integration values are loaded from `openclaw.json`:
@@ -55,6 +61,20 @@ Routing is channel-agnostic by default (via OpenClaw hooks). Discord direct deli
 Plugin auth alignment:
 
 - Configure plugin `bridgeToken` to exactly match `BRIDGE_API_TOKEN` once bridge auth is enabled.
+- Reinstall/reset can clear plugin config. Rerun bootstrap + auth checks after reinstall/update.
+
+Quick preflight checks:
+
+```bash
+./scripts/require-tailscale-funnel.sh
+RUN_VPS_AUTH_CHECK=true npm run qa:quick-checks
+```
+
+Private VPS deploy preflight flags (for `/Users/danpeguine/Projects/clawpilot-vps-cycle.sh`):
+
+1. `BRIDGE_TOKEN_ENV_FILE` (token source)
+2. `BRIDGE_WEBHOOK_ENV_FILE` (webhook/Funnel source; defaults to token env file)
+3. `BRIDGE_AUTH_PREFLIGHT` (`true` by default; validates 401 unauth + 200 auth)
 
 ## Verify End-to-End
 
@@ -130,4 +150,12 @@ See `RELEASING.md` for full steps.
 2. No copilot reaction:
    verify bridge `.env` values and check bridge logs
 3. Recall webhook failures:
-   confirm `WEBHOOK_BASE_URL` is public HTTPS and reachable from Recall.ai
+   confirm `WEBHOOK_BASE_URL` is `https://*.ts.net` and run `./scripts/require-tailscale-funnel.sh`
+4. Reinstall/update followed by 401 errors:
+   re-sync plugin token and restart daemon
+   `openclaw config set plugins.entries.clawpilot.config.bridgeToken "<BRIDGE_API_TOKEN>"`
+   `openclaw daemon restart`
+5. `ClawPilot command failed: fetch failed`:
+   verify plugin bridge URL points to a running bridge and Funnel health is green:
+   `openclaw config get plugins.entries.clawpilot.config.bridgeBaseUrl`
+   `curl -s https://<node>.ts.net/health`

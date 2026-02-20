@@ -27,7 +27,31 @@ npm start
 - `RECALL_API_KEY`
 - `RECALL_API_BASE` (region endpoint, e.g. `https://us-east-1.recall.ai` or `https://eu-central-1.recall.ai`)
 - `WEBHOOK_SECRET`
-- `WEBHOOK_BASE_URL`
+- `WEBHOOK_BASE_URL` (required `https://*.ts.net` for supported install/reinstall/update)
+
+## Tailscale Funnel Enforcement
+
+- Install/reinstall/update is hard-blocked unless Funnel is correctly aligned to bridge.
+- Required checks:
+  - local `GET /health` returns `200`
+  - public `${WEBHOOK_BASE_URL}/health` returns `200` with expected bridge shape
+  - URL is `https://*.ts.net`
+
+Run preflight manually:
+
+```bash
+../../scripts/require-tailscale-funnel.sh
+```
+
+Reinstall/update recovery:
+
+1. Rerun bootstrap:
+   `../../scripts/bootstrap-recall.sh`
+2. Re-run QA preflight:
+   `RUN_VPS_AUTH_CHECK=true npm run qa:quick-checks`
+3. Re-sync plugin token if needed:
+   `openclaw config set plugins.entries.clawpilot.config.bridgeToken "<BRIDGE_API_TOKEN>"`
+   `openclaw daemon restart`
 
 ## Bridge API Auth (Recommended)
 
@@ -55,6 +79,13 @@ Protected routes when `BRIDGE_API_TOKEN` is set:
 Migration note:
 
 - If `/clawpilot` commands start returning `401`, set plugin config `bridgeToken` to match `BRIDGE_API_TOKEN`.
+- If `/clawpilot` commands return network errors, verify plugin `bridgeBaseUrl` and Funnel `/health` connectivity.
+
+## launch-bot.sh behavior
+
+- `launch-bot.sh` now requires a valid Funnel URL by default.
+- Legacy ngrok fallback is disabled unless `ALLOW_NGROK_FALLBACK=true`.
+- Even with fallback enabled, health preflight still runs before bot launch.
 
 ## OpenClaw Configuration Source
 

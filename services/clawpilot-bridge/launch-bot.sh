@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/.env"
+FUNNEL_CHECK_SCRIPT="${SCRIPT_DIR}/../../scripts/require-tailscale-funnel.sh"
 if [[ -f "$ENV_FILE" ]]; then
   # shellcheck disable=SC1090
   source "$ENV_FILE"
@@ -19,6 +20,7 @@ REPLACE_ACTIVE_ON_DUPLICATE="${REPLACE_ACTIVE_ON_DUPLICATE:-true}"
 BOT_REPLACE_WAIT_TIMEOUT_SEC="${BOT_REPLACE_WAIT_TIMEOUT_SEC:-45}"
 BOT_REPLACE_POLL_SEC="${BOT_REPLACE_POLL_SEC:-2}"
 BOT_NAME="${BOT_NAME:-}"
+ALLOW_NGROK_FALLBACK="${ALLOW_NGROK_FALLBACK:-false}"
 
 extract_meeting_url() {
   printf '%s\n' "$1" | grep -Eo 'https?://[^[:space:]<>"'"'"']+' | grep -E 'meet\.google\.com|([a-z0-9-]+\.)?zoom\.us|teams\.microsoft\.com|teams\.live\.com' | head -n 1
@@ -44,6 +46,24 @@ parse_meeting_target() {
 is_truthy() {
   local v="${1,,}"
   [[ "$v" == "1" || "$v" == "true" || "$v" == "yes" || "$v" == "y" ]]
+}
+
+is_ts_net_https_url() {
+  local value="$1"
+  [[ "$value" =~ ^https://[^/]+\.ts\.net(/.*)?$ ]]
+}
+
+run_funnel_preflight() {
+  local require_ts_net="$1"
+  if [[ ! -x "$FUNNEL_CHECK_SCRIPT" ]]; then
+    echo "Error: funnel check script not found or not executable: $FUNNEL_CHECK_SCRIPT"
+    echo "Fix: restore script and run: chmod +x $FUNNEL_CHECK_SCRIPT"
+    exit 1
+  fi
+  BRIDGE_ENV_FILE="$ENV_FILE" \
+    WEBHOOK_BASE_URL_OVERRIDE="$WEBHOOK_BASE_URL" \
+    REQUIRE_TS_NET="$require_ts_net" \
+    "$FUNNEL_CHECK_SCRIPT"
 }
 
 sanitize_bot_name() {
@@ -144,17 +164,34 @@ if [[ -z "${WEBHOOK_SECRET:-}" ]]; then
 fi
 
 WEBHOOK_BASE_URL="${WEBHOOK_BASE_URL:-}"
-if [[ -z "$WEBHOOK_BASE_URL" ]]; then
+USED_NGROK_FALLBACK='false'
+if [[ -z "$WEBHOOK_BASE_URL" ]] && is_truthy "$ALLOW_NGROK_FALLBACK"; then
   NGROK_URL="$(curl -s http://localhost:4040/api/tunnels 2>/dev/null | jq -r '.tunnels[0].public_url // empty' || true)"
   if [[ -n "$NGROK_URL" ]]; then
     WEBHOOK_BASE_URL="$NGROK_URL"
+    USED_NGROK_FALLBACK='true'
+    echo "Warning: using legacy ngrok fallback URL because ALLOW_NGROK_FALLBACK=true" >&2
   fi
 fi
 
 if [[ -z "$WEBHOOK_BASE_URL" ]]; then
-  echo "Error: WEBHOOK_BASE_URL not set and ngrok URL not found"
-  echo "Fix: export WEBHOOK_BASE_URL=https://<public-domain>"
+  echo "Error: WEBHOOK_BASE_URL is required and must point to your Tailscale Funnel URL."
+  echo "Fix: export WEBHOOK_BASE_URL=https://<node>.ts.net"
+  echo "Optional legacy fallback: set ALLOW_NGROK_FALLBACK=true (temporary dev only)."
   exit 1
+fi
+
+if [[ "$USED_NGROK_FALLBACK" != "true" ]] && ! is_ts_net_https_url "$WEBHOOK_BASE_URL"; then
+  echo "Error: WEBHOOK_BASE_URL must be an https://*.ts.net Funnel URL."
+  echo "Current value: $WEBHOOK_BASE_URL"
+  echo "Fix: set WEBHOOK_BASE_URL=https://<node>.ts.net"
+  exit 1
+fi
+
+if [[ "$USED_NGROK_FALLBACK" == "true" ]]; then
+  run_funnel_preflight "false"
+else
+  run_funnel_preflight "true"
 fi
 
 WEBHOOK_URL="${WEBHOOK_BASE_URL%/}/webhook?token=${WEBHOOK_SECRET}"
