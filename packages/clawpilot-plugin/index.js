@@ -84,14 +84,20 @@ function extractMeetingUrl(text) {
 
 function parseJoinArgs(raw) {
   const input = String(raw || '').trim();
-  const nameFlag = /\s--name\s+/i;
-  if (!nameFlag.test(input)) {
-    return { meetingUrl: extractMeetingUrl(input), botName: '' };
+  // Normalize common smart dash characters so commands copied from rich text still parse.
+  const normalizedInput = input.replace(/[–—―−]/g, '-');
+  const nameFlagMatch = normalizedInput.match(/(?:^|\s)-{1,2}name(?:\s+|=)/i);
+  if (!nameFlagMatch) {
+    return { meetingUrl: extractMeetingUrl(normalizedInput), botName: '' };
   }
 
-  const parts = input.split(nameFlag);
-  const meetingPart = parts[0] || '';
-  const namePart = (parts.slice(1).join(' ') || '').trim();
+  const flagIndex = nameFlagMatch.index ?? -1;
+  if (flagIndex < 0) {
+    return { meetingUrl: extractMeetingUrl(normalizedInput), botName: '' };
+  }
+
+  const meetingPart = normalizedInput.slice(0, flagIndex).trim();
+  const namePart = normalizedInput.slice(flagIndex + nameFlagMatch[0].length).trim();
   const unwrappedName = namePart.replace(/^["']|["']$/g, '').trim();
   return {
     meetingUrl: extractMeetingUrl(meetingPart),
