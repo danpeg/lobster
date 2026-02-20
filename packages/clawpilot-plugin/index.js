@@ -1,5 +1,6 @@
 const PLUGIN_ID = 'clawpilot';
 const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:3001';
+const HUMAN_FIRST_NAME_BY_ROUTE = new Map();
 
 function sanitizeAgentName(value) {
   const normalized = String(value || '')
@@ -105,6 +106,97 @@ function parseJoinArgs(raw) {
   };
 }
 
+function buildRouteLookupKey(routeTarget) {
+  const channel = sanitizeAgentName(routeTarget?.channel || '').toLowerCase();
+  const to = sanitizeAgentName(routeTarget?.to || '');
+  if (!channel || !to) return '';
+  return `${channel}:${to}`;
+}
+
+function extractHumanFirstName(value) {
+  const normalized = String(value || '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return '';
+
+  const withoutMention = normalized.replace(/^@+/, '');
+  if (!withoutMention) return '';
+  if (/^(telegram:\d+|\d+)$/i.test(withoutMention)) return '';
+
+  const token = withoutMention.split(' ')[0] || '';
+  const clean = token.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ'’]/g, '');
+  if (!/[A-Za-zÀ-ÖØ-öø-ÿ]/.test(clean)) return '';
+  return sanitizeAgentName(clean);
+}
+
+function inferHumanFirstName(ctx, event = null) {
+  const metadata = event?.metadata || {};
+  const directCandidates = [
+    ctx?.firstName,
+    ctx?.first_name,
+    ctx?.senderFirstName,
+    ctx?.sender_first_name,
+    ctx?.user?.firstName,
+    ctx?.user?.first_name,
+    ctx?.sender?.firstName,
+    ctx?.sender?.first_name,
+    ctx?.author?.firstName,
+    ctx?.author?.first_name,
+    metadata?.firstName,
+    metadata?.first_name,
+    metadata?.senderFirstName,
+    metadata?.sender_first_name,
+  ];
+  for (const candidate of directCandidates) {
+    const firstName = extractHumanFirstName(candidate);
+    if (firstName) return firstName;
+  }
+
+  const fullNameCandidates = [
+    ctx?.displayName,
+    ctx?.display_name,
+    ctx?.senderName,
+    ctx?.sender_name,
+    ctx?.fromName,
+    ctx?.from_name,
+    ctx?.user?.name,
+    ctx?.user?.displayName,
+    ctx?.sender?.name,
+    ctx?.sender?.displayName,
+    ctx?.author?.name,
+    ctx?.profile?.name,
+    ctx?.identity?.name,
+    metadata?.senderName,
+    metadata?.sender_name,
+    metadata?.displayName,
+    metadata?.display_name,
+    metadata?.username,
+    event?.from,
+  ];
+  for (const candidate of fullNameCandidates) {
+    const firstName = extractHumanFirstName(candidate);
+    if (firstName) return firstName;
+  }
+
+  return '';
+}
+
+function rememberHumanFirstName(ctx, event = null, routeTarget = null) {
+  const firstName = inferHumanFirstName(ctx, event);
+  if (!firstName) return;
+  const routeKey = buildRouteLookupKey(routeTarget);
+  if (!routeKey) return;
+  HUMAN_FIRST_NAME_BY_ROUTE.set(routeKey, firstName);
+}
+
+function inferDefaultLobsterName(ctx, event = null, routeTarget = null) {
+  const routeKey = buildRouteLookupKey(routeTarget);
+  const firstName = inferHumanFirstName(ctx, event) || (routeKey ? HUMAN_FIRST_NAME_BY_ROUTE.get(routeKey) || '' : '');
+  if (!firstName) return '';
+  return sanitizeAgentName(`${firstName}'s Lobster 🦞`);
+}
+
 function buildHelpText() {
   return [
     'ClawPilot commands:',
@@ -117,7 +209,7 @@ function buildHelpText() {
     '',
     '/clawpilot join <meeting_url> [--name "Bot Name"]',
     '  Join a meeting with Recall bot.',
-    '  Default bot name is your OpenClaw agent name.',
+    "  Default bot name is <your first name>'s Lobster 🦞.",
     '',
     '/clawpilot pause',
     '  Pause transcript processing and reactions.',
@@ -408,10 +500,11 @@ export default function register(api) {
   api.on('message_received', async (event, ctx) => {
     try {
       const text = String(event?.content || '').trim();
+      const routeTarget = buildRouteTargetFromHook(event, ctx);
+      rememberHumanFirstName(ctx, event, routeTarget);
       if (!text || text.startsWith('/')) return;
       if (!looksLikeStartupPreferenceText(text)) return;
 
-      const routeTarget = buildRouteTargetFromHook(event, ctx);
       const ownerBinding = buildOwnerBindingFromHook(event, ctx, routeTarget);
       const body = { text };
       if (routeTarget) body.route_target = routeTarget;
@@ -451,7 +544,7 @@ export default function register(api) {
                 '/clawpilot join <meeting_url>',
                 '/clawpilot join <meeting_url> --name "Custom Bot Name"',
                 '',
-                'Default bot name is your OpenClaw agent name.',
+                "Default bot name is <your first name>'s Lobster 🦞.",
                 '',
                 'Supported: Google Meet, Zoom, Microsoft Teams',
               ].join('\n'),
@@ -460,6 +553,7 @@ export default function register(api) {
 
           const payload = { meeting_url: parsed.meetingUrl };
           const routeTarget = buildRouteTarget(ctx);
+          rememberHumanFirstName(ctx, null, routeTarget);
           const ownerBinding = buildOwnerBinding(ctx);
           const { teamAgent } = loadBridgeConfig(api);
           if (routeTarget) {
@@ -472,8 +566,13 @@ export default function register(api) {
           payload.team_agent = teamAgent;
           if (parsed.botName) payload.bot_name = parsed.botName;
           if (!parsed.botName) {
-            const agentName = inferAgentName(api, ctx);
-            if (agentName) payload.agent_name = agentName;
+            const defaultLobsterName = inferDefaultLobsterName(ctx, null, routeTarget);
+            if (defaultLobsterName) {
+              payload.bot_name = defaultLobsterName;
+            } else {
+              const agentName = inferAgentName(api, ctx);
+              if (agentName) payload.agent_name = agentName;
+            }
           }
           const result = await callBridge(api, '/launch', { method: 'POST', body: payload });
           return { text: formatJoinSummary(result) };
