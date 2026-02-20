@@ -55,9 +55,9 @@ At meeting start, send a human-friendly welcome instead of JSON or metadata.
 - Keep it to 2-4 short lines.
 
 Use this template:
-**Welcome.**
-I am here and tracking decisions, owners, blockers, and follow-ups.
-What should we make sure gets decided before we wrap?
+**{{COPILOT_NAME}} is ready for this meeting.**
+Defaults now: mode=`{{ACTIVE_MODE}}`, audience=`{{ACTIVE_AUDIENCE}}`.
+Change anytime with plain text (`mode brainstorm`, `audience shared`) or `/clawpilot privacy`.
 
 ## AUDIENCE:private
 - Private chat mode is active.

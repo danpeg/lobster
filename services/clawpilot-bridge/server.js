@@ -60,6 +60,8 @@ function resolveBotName(options = {}) {
   const providedAgentName = sanitizeBotName(options.agentName || '');
   if (providedAgentName) return providedAgentName;
 
+  if (OPENCLAW_AGENT_NAME_DEFAULT) return OPENCLAW_AGENT_NAME_DEFAULT;
+
   const agentName = sanitizeBotName(
     process.env.OPENCLAW_AGENT_NAME || process.env.CLAW_AGENT_NAME || process.env.AGENT_NAME || ''
   );
@@ -99,11 +101,21 @@ function readOpenClawHookDefaults() {
       cfg?.channels?.discord?.token,
       cfg?.channels?.discord?.bot_token
     ]);
+    const agentName = pickFirstString([
+      cfg?.agent?.name,
+      cfg?.assistant?.name,
+      cfg?.persona?.name,
+      cfg?.agents?.main?.name,
+      cfg?.agents?.defaults?.name,
+      cfg?.channels?.telegram?.displayName,
+      cfg?.channels?.telegram?.name
+    ]);
     return {
       hookUrl: `http://127.0.0.1:${gatewayPort}${hooksPath}/wake`,
       hookToken,
       telegramBotToken,
       discordBotToken,
+      agentName,
       configPath
     };
   } catch {
@@ -112,6 +124,7 @@ function readOpenClawHookDefaults() {
       hookToken: '',
       telegramBotToken: '',
       discordBotToken: '',
+      agentName: '',
       configPath
     };
   }
@@ -130,6 +143,7 @@ const DEFAULT_RECALL_LANGUAGE = process.env.RECALL_LANGUAGE_CODE || 'en';
 const DEFAULT_RECALL_STT_MODE = process.env.RECALL_STT_MODE || 'prioritize_low_latency';
 const OPENCLAW_HOOK_URL = OPENCLAW_HOOK_DEFAULTS.hookUrl || 'http://127.0.0.1:18789/hooks/wake';
 const OPENCLAW_HOOK_TOKEN = OPENCLAW_HOOK_DEFAULTS.hookToken || '';
+const OPENCLAW_AGENT_NAME_DEFAULT = sanitizeBotName(OPENCLAW_HOOK_DEFAULTS.agentName || '');
 const OPENCLAW_HOOK_URL_SOURCE = OPENCLAW_HOOK_DEFAULTS.hookUrl ? 'openclaw.json' : 'builtin-default';
 const OPENCLAW_HOOK_TOKEN_SOURCE = OPENCLAW_HOOK_DEFAULTS.hookToken ? 'openclaw.json' : 'missing';
 const REPLACE_ACTIVE_ON_DUPLICATE = process.env.REPLACE_ACTIVE_ON_DUPLICATE !== 'false';
@@ -165,9 +179,9 @@ const LOBSTER_PROMPT_PATH = path.resolve(
 const promptManager = createPromptManager({ promptPath: LOBSTER_PROMPT_PATH });
 const ALLOWED_REVEAL_CATEGORIES = new Set(['commitments', 'contacts', 'context', 'notes']);
 const DEFAULT_MEETING_START_PROMPT = [
-  '**Welcome.**',
-  'I am here and tracking decisions, owners, blockers, and follow-ups.',
-  'What should we make sure gets decided before we wrap?'
+  '**{{COPILOT_NAME}} is ready for this meeting.**',
+  'Defaults now: mode=`{{ACTIVE_MODE}}`, audience=`{{ACTIVE_AUDIENCE}}`.',
+  'Change anytime with plain text (`mode brainstorm`, `audience shared`) or `/clawpilot privacy`.'
 ].join('\n');
 let cachedMeetingStartPrompt = null;
 

@@ -24,6 +24,10 @@ build/
 # Local state
 .tmp/
 tmp/
+services/clawpilot-bridge/.bridge-state.json
+
+# Local plugin packaging artifacts
+packages/clawpilot-plugin/*.tgz
 
 # QA run outputs
 qa/runs/*

@@ -111,6 +111,7 @@ function buildHelpText() {
     '',
     '/clawpilot join <meeting_url> [--name "Bot Name"]',
     '  Join a meeting with Recall bot.',
+    '  Default bot name is your OpenClaw agent name.',
     '',
     '/clawpilot pause',
     '  Pause transcript processing and reactions.',
@@ -178,17 +179,7 @@ function inferAgentName(api, ctx) {
   const fromPluginConfig = sanitizeAgentName(pluginCfg.agentName);
   if (fromPluginConfig) return fromPluginConfig;
 
-  const fromContext = pickFirstNonEmptyString([
-    ctx?.agentName,
-    ctx?.agent?.name,
-    ctx?.profile?.name,
-    ctx?.identity?.name,
-    ctx?.assistant?.name,
-    ctx?.user?.name,
-  ]);
-  if (fromContext) return fromContext;
-
-  return pickFirstNonEmptyString([
+  const fromGlobalConfig = pickFirstNonEmptyString([
     cfg?.agent?.name,
     cfg?.assistant?.name,
     cfg?.persona?.name,
@@ -196,6 +187,15 @@ function inferAgentName(api, ctx) {
     cfg?.agents?.defaults?.name,
     cfg?.channels?.telegram?.displayName,
     cfg?.channels?.telegram?.name,
+  ]);
+  if (fromGlobalConfig) return fromGlobalConfig;
+
+  return pickFirstNonEmptyString([
+    ctx?.agentName,
+    ctx?.agent?.name,
+    ctx?.profile?.name,
+    ctx?.identity?.name,
+    ctx?.assistant?.name,
   ]);
 }
 
@@ -444,6 +444,8 @@ export default function register(api) {
                 'Usage:',
                 '/clawpilot join <meeting_url>',
                 '/clawpilot join <meeting_url> --name "Custom Bot Name"',
+                '',
+                'Default bot name is your OpenClaw agent name.',
                 '',
                 'Supported: Google Meet, Zoom, Microsoft Teams',
               ].join('\n'),
