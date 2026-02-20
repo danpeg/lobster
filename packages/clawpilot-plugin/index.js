@@ -470,6 +470,12 @@ function stringifyCommandCandidate(value) {
 
 function extractExecCommandFromHook(event, ctx) {
   const candidates = [
+    event?.params,
+    event?.params?.command,
+    event?.params?.cmd,
+    event?.params?.args,
+    event?.params?.input,
+    event?.params?.text,
     event?.command,
     event?.cmd,
     event?.args,
