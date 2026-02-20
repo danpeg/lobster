@@ -166,7 +166,7 @@ const DISCORD_MAX_MESSAGE_CHARS = 2000;
 const DISCORD_DIRECT_MAX_RETRIES = 2;
 const DISCORD_DIRECT_RETRY_BASE_MS = 1000;
 const OPENCLAW_CLI_BIN = String(process.env.OPENCLAW_CLI_BIN || 'openclaw').trim() || 'openclaw';
-const OPENCLAW_COPILOT_CLI_ROUTED = parseBooleanLike(process.env.OPENCLAW_COPILOT_CLI_ROUTED, true);
+const OPENCLAW_COPILOT_CLI_ROUTED = parseBooleanLike(process.env.OPENCLAW_COPILOT_CLI_ROUTED, false);
 const OPENCLAW_AGENT_CLI_TIMEOUT_MS = Number(process.env.OPENCLAW_AGENT_CLI_TIMEOUT_MS || 45000);
 const OPENCLAW_MESSAGE_CLI_TIMEOUT_MS = Number(process.env.OPENCLAW_MESSAGE_CLI_TIMEOUT_MS || 20000);
 const BRIDGE_STATE_FILE_RAW = String(process.env.BRIDGE_STATE_FILE || '.bridge-state.json').trim();
@@ -209,6 +209,8 @@ if (DISCORD_DIRECT_DELIVERY && !DISCORD_BOT_TOKEN) {
 }
 if (OPENCLAW_COPILOT_CLI_ROUTED) {
   console.log(`[CopilotCLI] enabled cli_bin=${OPENCLAW_CLI_BIN}`);
+} else {
+  console.log('[CopilotCLI] disabled (set OPENCLAW_COPILOT_CLI_ROUTED=true to re-enable)');
 }
 
 // Debug mode - mirror raw final transcripts to active OpenClaw chat channel.
@@ -2146,7 +2148,7 @@ app.post('/launch', requireBridgeAuth, async (req, res) => {
 });
 
 // Main webhook endpoint
-app.post('/webhook', async (req, res) => {
+app.post('/webhook', (req, res) => {
   const eventType = req.body?.event || 'unknown';
   const isTranscriptEvent =
     eventType === 'transcript.data' || eventType === 'transcript.partial_data';
@@ -2171,39 +2173,41 @@ app.post('/webhook', async (req, res) => {
   console.log(
     `[${new Date().toISOString()}] Webhook received: ${eventType} token=${tokenPreview}`
   );
-  
-  try {
-    switch (event.event) {
-      // Bot status events (via Svix dashboard webhooks)
-      case 'bot.joining_call':
-      case 'bot.in_waiting_room':
-      case 'bot.in_call_not_recording':
-      case 'bot.in_call_recording':
-      case 'bot.call_ended':
-      case 'bot.done':
-      case 'bot.fatal':
-        await handleBotStatus(event);
-        break;
-      
-      // Real-time transcript events (per-bot webhook)
-      case 'transcript.data':
-        await handleRecallTranscript(event.data, false, event);
-        break;
-      
-      case 'transcript.partial_data':
-        await handleRecallTranscript(event.data, true, event);
-        break;
-        
-      default:
-        console.log('Unhandled event type:', event.event);
-        console.log('Full payload:', JSON.stringify(event, null, 2));
+
+  // Ack immediately to avoid upstream webhook backpressure when reactions are slow.
+  res.status(200).json({ received: true });
+
+  setImmediate(async () => {
+    try {
+      switch (event.event) {
+        // Bot status events (via Svix dashboard webhooks)
+        case 'bot.joining_call':
+        case 'bot.in_waiting_room':
+        case 'bot.in_call_not_recording':
+        case 'bot.in_call_recording':
+        case 'bot.call_ended':
+        case 'bot.done':
+        case 'bot.fatal':
+          await handleBotStatus(event);
+          break;
+
+        // Real-time transcript events (per-bot webhook)
+        case 'transcript.data':
+          await handleRecallTranscript(event.data, false, event);
+          break;
+
+        case 'transcript.partial_data':
+          await handleRecallTranscript(event.data, true, event);
+          break;
+
+        default:
+          console.log('Unhandled event type:', event.event);
+          console.log('Full payload:', JSON.stringify(event, null, 2));
+      }
+    } catch (error) {
+      console.error('Error processing webhook:', error);
     }
-    
-    res.status(200).json({ received: true });
-  } catch (error) {
-    console.error('Error processing webhook:', error);
-    res.status(500).json({ error: error.message });
-  }
+  });
 });
 
 async function handleBotStatus(event) {
