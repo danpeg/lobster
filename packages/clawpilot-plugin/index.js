@@ -1,6 +1,8 @@
 const PLUGIN_ID = 'clawpilot';
 const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:3001';
 const HUMAN_FIRST_NAME_BY_ROUTE = new Map();
+const AUTO_JOIN_REPLY_BY_ROUTE = new Map();
+const AUTO_JOIN_REPLY_TTL_MS = 60_000;
 
 function sanitizeAgentName(value) {
   const normalized = String(value || '')
@@ -113,6 +115,44 @@ function buildRouteLookupKey(routeTarget) {
   return `${channel}:${to}`;
 }
 
+function buildRouteLookupKeyFromMessageContext(ctx, event = null) {
+  const channel = sanitizeAgentName(ctx?.channelId || '').toLowerCase();
+  const to = sanitizeAgentName(ctx?.conversationId || event?.to || '');
+  if (!channel || !to) return '';
+  return `${channel}:${to}`;
+}
+
+function queueAutoJoinReply(routeKey, text) {
+  if (!routeKey) return;
+  const content = String(text || '').trim();
+  if (!content) return;
+  AUTO_JOIN_REPLY_BY_ROUTE.set(routeKey, {
+    content: content.slice(0, 2000),
+    expiresAt: Date.now() + AUTO_JOIN_REPLY_TTL_MS,
+  });
+}
+
+function consumeAutoJoinReply(routeKey) {
+  if (!routeKey) return '';
+  const item = AUTO_JOIN_REPLY_BY_ROUTE.get(routeKey);
+  if (!item) return '';
+  AUTO_JOIN_REPLY_BY_ROUTE.delete(routeKey);
+  if (!item.content || item.expiresAt < Date.now()) return '';
+  return item.content;
+}
+
+function isDirectMeetingJoinText(text, meetingUrl) {
+  const input = String(text || '').trim();
+  const url = String(meetingUrl || '').trim();
+  if (!input || !url) return false;
+  const normalized = input.replace(/[–—―−]/g, '-');
+  if (normalized === url) return true;
+  const remainder = normalized.replace(url, '').trim();
+  if (!remainder) return true;
+  if (/^-{1,2}name(?:\s+|=).+/i.test(remainder)) return true;
+  return /^join\b/i.test(normalized) && normalized.includes(url);
+}
+
 function extractHumanFirstName(value) {
   const normalized = String(value || '')
     .replace(/[_-]+/g, ' ')
@@ -210,6 +250,7 @@ function buildHelpText() {
     '/clawpilot join <meeting_url> [--name "Bot Name"]',
     '  Join a meeting with Recall bot.',
     "  Default bot name is <your first name>'s Lobster 🦞.",
+    '  Tip: pasting only a meeting URL also triggers join.',
     '',
     '/clawpilot pause',
     '  Pause transcript processing and reactions.',
@@ -502,6 +543,36 @@ export default function register(api) {
       const text = String(event?.content || '').trim();
       const routeTarget = buildRouteTargetFromHook(event, ctx);
       rememberHumanFirstName(ctx, event, routeTarget);
+      const autoJoinArgs = parseJoinArgs(text);
+      if (
+        autoJoinArgs.meetingUrl &&
+        isDirectMeetingJoinText(text, autoJoinArgs.meetingUrl) &&
+        !text.startsWith('/clawpilot')
+      ) {
+        try {
+          const ownerBinding = buildOwnerBindingFromHook(event, ctx, routeTarget);
+          const { teamAgent } = loadBridgeConfig(api);
+          const payload = { meeting_url: autoJoinArgs.meetingUrl, team_agent: teamAgent };
+          if (routeTarget) payload.route_target = routeTarget;
+          if (ownerBinding) payload.owner_binding = ownerBinding;
+          if (autoJoinArgs.botName) {
+            payload.bot_name = autoJoinArgs.botName;
+          } else {
+            const defaultLobsterName = inferDefaultLobsterName(ctx, event, routeTarget);
+            payload.bot_name = defaultLobsterName || 'Lobster 🦞';
+          }
+
+          const result = await callBridge(api, '/launch', { method: 'POST', body: payload });
+          const routeKey = buildRouteLookupKey(routeTarget);
+          queueAutoJoinReply(routeKey, formatJoinSummary(result));
+          return;
+        } catch (err) {
+          const routeKey = buildRouteLookupKey(routeTarget);
+          queueAutoJoinReply(routeKey, `ClawPilot auto-join failed: ${err.message}`);
+          return;
+        }
+      }
+
       if (!text || text.startsWith('/')) return;
       if (!looksLikeStartupPreferenceText(text)) return;
 
@@ -513,6 +584,13 @@ export default function register(api) {
     } catch (err) {
       api.logger.warn(`[ClawPilot] startup-input forward failed: ${err.message}`);
     }
+  });
+
+  api.on('message_sending', (event, ctx) => {
+    const routeKey = buildRouteLookupKeyFromMessageContext(ctx, event);
+    const queued = consumeAutoJoinReply(routeKey);
+    if (!queued) return;
+    return { content: queued };
   });
 
   api.registerCommand({
