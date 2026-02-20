@@ -627,8 +627,9 @@ async function sendVerboseMirrorToOpenClaw(line, options = {}) {
   const routeText = formatRouteText(routeTarget, 'last');
   let direct = null;
   try {
-    // Avoid hook-path NO_REPLY/suppression for mirrored transcript lines.
-    if (OPENCLAW_COPILOT_CLI_ROUTED && routeTarget?.channel && routeTarget?.to) {
+    // Always prefer direct CLI delivery for mirrored transcript lines when routed.
+    // This bypasses hook-path NO_REPLY/suppression and keeps transcript mirroring reliable.
+    if (routeTarget?.channel && routeTarget?.to) {
       try {
         await deliverTextViaCli(routeTarget, line);
         const elapsed = Date.now() - sendStart;
