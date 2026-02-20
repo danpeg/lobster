@@ -83,12 +83,22 @@ Toggle transcript mirroring in active chat:
 /clawpilot transcript on
 /clawpilot transcript off
 ```
+Mode and privacy controls:
+```text
+/clawpilot mode
+/clawpilot mode brainstorm
+/clawpilot audience private
+/clawpilot audience shared
+/clawpilot privacy
+/clawpilot reveal context
+```
 5. Confirm transcripts trigger copilot responses.
 
 ## Components
 
 1. `packages/clawpilot-plugin`: npm-installable OpenClaw plugin (`/clawpilot` command)
 2. `services/clawpilot-bridge`: Recall webhook receiver and OpenClaw hook bridge
+3. `services/clawpilot-bridge/prompts/lobster.md`: editable meeting copilot prompt pack
 
 ## Security Notes
 

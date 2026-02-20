@@ -11,6 +11,14 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const meeting = require('./meeting-page.js');
+const {
+  createPromptManager,
+  FALLBACK_MODE,
+  FALLBACK_AUDIENCE,
+  normalizeMode,
+  normalizeAudience,
+  normalizeName
+} = require('./prompt-loader.js');
 const app = express();
 const PORT = process.env.PORT || 3001;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -50,17 +58,12 @@ function resolveBotName(options = {}) {
   if (explicit) return explicit;
 
   const providedAgentName = sanitizeBotName(options.agentName || '');
-  if (providedAgentName) {
-    const suffix = sanitizeBotName(process.env.RECALL_BOT_NAME_SUFFIX || 'Note Taker', 'Note Taker');
-    return sanitizeBotName(`${providedAgentName} ${suffix}`, `${providedAgentName} Note Taker`);
-  }
+  if (providedAgentName) return providedAgentName;
 
   const agentName = sanitizeBotName(
     process.env.OPENCLAW_AGENT_NAME || process.env.CLAW_AGENT_NAME || process.env.AGENT_NAME || ''
   );
-  const suffix = sanitizeBotName(process.env.RECALL_BOT_NAME_SUFFIX || 'Note Taker', 'Note Taker');
-  const base = agentName || 'OpenClaw';
-  return sanitizeBotName(`${base} ${suffix}`, 'OpenClaw Note Taker');
+  return agentName || 'OpenClaw';
 }
 
 // Recall API key for verification
@@ -156,6 +159,11 @@ const BRIDGE_STATE_FILE_RAW = String(process.env.BRIDGE_STATE_FILE || '.bridge-s
 const BRIDGE_STATE_FILE = path.isAbsolute(BRIDGE_STATE_FILE_RAW)
   ? BRIDGE_STATE_FILE_RAW
   : path.join(__dirname, BRIDGE_STATE_FILE_RAW);
+const LOBSTER_PROMPT_PATH = path.resolve(
+  process.env.LOBSTER_PROMPT_PATH || path.join(__dirname, 'prompts', 'lobster.md')
+);
+const promptManager = createPromptManager({ promptPath: LOBSTER_PROMPT_PATH });
+const ALLOWED_REVEAL_CATEGORIES = new Set(['commitments', 'contacts', 'context', 'notes']);
 
 if (DISCORD_DIRECT_DELIVERY && !DISCORD_BOT_TOKEN) {
   console.warn('[DiscordDirect] DISCORD_DIRECT_DELIVERY enabled but Discord bot token was not found in openclaw.json. Falling back to OpenClaw hooks.');
@@ -642,6 +650,12 @@ const meetingSessionByBotId = new Map(); // bot_id -> canvas session id
 const routeTargetByBotId = new Map(); // bot_id -> { channel, to }
 const lastCanvasLineBySession = new Map(); // session id -> last line to dedupe
 const botSessionLookupInFlight = new Map(); // bot_id -> Promise<string|null>
+const copilotNameBySessionId = new Map(); // session id -> display name
+const teamAgentBySessionId = new Map(); // session id -> boolean
+const audienceBySessionId = new Map(); // session id -> private|shared
+const modeBySessionId = new Map(); // session id -> mode name
+const ownerBindingBySessionId = new Map(); // session id -> owner identity tuple
+const revealGrantBySessionId = new Map(); // session id -> { category, remaining, granted_at }
 let activeMeetingSessionId = 'default';
 let activeRouteTarget = null;
 let bridgeStatePersistPending = false;
@@ -676,6 +690,243 @@ function normalizeRouteTarget(raw) {
   return normalized;
 }
 
+function normalizeOwnerBinding(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const channel = normalizeRouteChannel(raw.channel || raw.channelId);
+  const to = [raw.to, raw.conversationId, raw.chatId, raw.from]
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .find((value) => Boolean(value));
+  if (!channel || !to) return null;
+  const normalized = { channel, to };
+  const accountId = typeof raw.accountId === 'string' ? raw.accountId.trim() : '';
+  if (accountId) normalized.accountId = accountId;
+  const senderId = typeof raw.senderId === 'string' ? raw.senderId.trim() : '';
+  if (senderId) normalized.senderId = senderId;
+  return normalized;
+}
+
+function ownerBindingMatches(expected, received) {
+  const left = normalizeOwnerBinding(expected);
+  const right = normalizeOwnerBinding(received);
+  if (!left || !right) return false;
+  if (left.channel !== right.channel) return false;
+  if (left.to !== right.to) return false;
+  if ((left.accountId || '') !== (right.accountId || '')) return false;
+  if (left.senderId) {
+    return left.senderId === (right.senderId || '');
+  }
+  return true;
+}
+
+function normalizeRevealCategory(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ALLOWED_REVEAL_CATEGORIES.has(normalized) ? normalized : '';
+}
+
+function getAvailableModes() {
+  const modes = promptManager.getAvailableModes();
+  if (!modes.includes(FALLBACK_MODE)) modes.push(FALLBACK_MODE);
+  return modes;
+}
+
+function resolveModeOrDefault(value) {
+  const requested = normalizeMode(value);
+  const availableModes = getAvailableModes();
+  if (availableModes.includes(requested)) return requested;
+  const fromPrompt = normalizeMode(promptManager.getDefaultMode());
+  if (availableModes.includes(fromPrompt)) return fromPrompt;
+  return FALLBACK_MODE;
+}
+
+function resolveAudienceOrDefault(value) {
+  const normalized = normalizeAudience(value);
+  return normalized === 'shared' ? 'shared' : FALLBACK_AUDIENCE;
+}
+
+function normalizeSessionInput(value) {
+  return normalizeMeetingSessionId(value || activeMeetingSessionId);
+}
+
+function getSessionMode(sessionId) {
+  const normalized = normalizeSessionInput(sessionId);
+  const current = modeBySessionId.get(normalized);
+  return resolveModeOrDefault(current);
+}
+
+function getSessionAudience(sessionId) {
+  const normalized = normalizeSessionInput(sessionId);
+  const current = audienceBySessionId.get(normalized);
+  return resolveAudienceOrDefault(current);
+}
+
+function ensureSessionDefaults(sessionId) {
+  const normalized = normalizeSessionInput(sessionId);
+  if (!modeBySessionId.has(normalized)) {
+    modeBySessionId.set(normalized, resolveModeOrDefault(promptManager.getDefaultMode()));
+  }
+  if (!audienceBySessionId.has(normalized)) {
+    audienceBySessionId.set(normalized, FALLBACK_AUDIENCE);
+  }
+  return normalized;
+}
+
+function setSessionMode(sessionId, mode, reason = 'manual') {
+  const normalized = ensureSessionDefaults(sessionId);
+  const nextMode = resolveModeOrDefault(mode);
+  modeBySessionId.set(normalized, nextMode);
+  persistBridgeState(`mode:${reason}`);
+  return {
+    session: normalized,
+    mode: nextMode,
+    default_mode: resolveModeOrDefault(promptManager.getDefaultMode()),
+    available_modes: getAvailableModes()
+  };
+}
+
+function setSessionAudience(sessionId, audience, reason = 'manual') {
+  const normalized = ensureSessionDefaults(sessionId);
+  const nextAudience = resolveAudienceOrDefault(audience);
+  audienceBySessionId.set(normalized, nextAudience);
+  persistBridgeState(`audience:${reason}`);
+  return {
+    session: normalized,
+    audience: nextAudience
+  };
+}
+
+function setSessionCopilotName(sessionId, name) {
+  const normalized = ensureSessionDefaults(sessionId);
+  const clean = normalizeName(name, '');
+  if (!clean) return;
+  copilotNameBySessionId.set(normalized, clean);
+  persistBridgeState('copilot_name');
+}
+
+function getSessionCopilotName(sessionId) {
+  const normalized = normalizeSessionInput(sessionId);
+  return normalizeName(copilotNameBySessionId.get(normalized), 'OpenClaw');
+}
+
+function setSessionTeamAgent(sessionId, teamAgent) {
+  const normalized = ensureSessionDefaults(sessionId);
+  teamAgentBySessionId.set(normalized, Boolean(teamAgent));
+  persistBridgeState('team_agent');
+}
+
+function getSessionTeamAgent(sessionId) {
+  const normalized = normalizeSessionInput(sessionId);
+  return Boolean(teamAgentBySessionId.get(normalized));
+}
+
+function setSessionOwnerBinding(sessionId, ownerBinding) {
+  const normalized = ensureSessionDefaults(sessionId);
+  const parsed = normalizeOwnerBinding(ownerBinding);
+  if (!parsed) return;
+  ownerBindingBySessionId.set(normalized, parsed);
+  persistBridgeState('owner_binding');
+}
+
+function getSessionOwnerBinding(sessionId) {
+  const normalized = normalizeSessionInput(sessionId);
+  return ownerBindingBySessionId.get(normalized) || null;
+}
+
+function setSessionRevealGrant(sessionId, category) {
+  const normalized = ensureSessionDefaults(sessionId);
+  const cleanCategory = normalizeRevealCategory(category);
+  if (!cleanCategory) return null;
+  const grant = {
+    category: cleanCategory,
+    remaining: 1,
+    granted_at: new Date().toISOString()
+  };
+  revealGrantBySessionId.set(normalized, grant);
+  persistBridgeState('reveal_grant');
+  return grant;
+}
+
+function getSessionRevealGrant(sessionId) {
+  const normalized = normalizeSessionInput(sessionId);
+  const grant = revealGrantBySessionId.get(normalized);
+  if (!grant) return null;
+  const remaining = Number(grant.remaining || 0);
+  if (remaining <= 0) return null;
+  return { ...grant, remaining };
+}
+
+function consumeSessionRevealGrant(sessionId) {
+  const normalized = normalizeSessionInput(sessionId);
+  const grant = revealGrantBySessionId.get(normalized);
+  if (!grant) return;
+  const remaining = Math.max(0, Number(grant.remaining || 0) - 1);
+  if (remaining <= 0) {
+    revealGrantBySessionId.delete(normalized);
+  } else {
+    revealGrantBySessionId.set(normalized, { ...grant, remaining });
+  }
+  persistBridgeState('reveal_consume');
+}
+
+function buildRevealBlock(sessionId) {
+  const grant = getSessionRevealGrant(sessionId);
+  if (!grant) {
+    return '';
+  }
+  return [
+    `Owner approved one-time reveal grant for category: ${grant.category}.`,
+    'You may include only minimal details for this single response.',
+    'After this response, return to normal privacy restrictions.'
+  ].join('\n');
+}
+
+function buildPromptInput(sessionId, meetingContext) {
+  const normalized = ensureSessionDefaults(sessionId);
+  return {
+    copilotName: getSessionCopilotName(normalized),
+    meetingContext,
+    mode: getSessionMode(normalized),
+    audience: getSessionAudience(normalized),
+    teamAgent: getSessionTeamAgent(normalized),
+    revealBlock: buildRevealBlock(normalized)
+  };
+}
+
+function looksLikePrivateRecall(text) {
+  const normalized = String(text || '').toLowerCase();
+  if (!normalized) return false;
+  return /\b(previous call|last week|last month|last quarter|you mentioned before|from your past|personal note|private)\b/.test(normalized);
+}
+
+function applyPrivacyOutputGuard(text, sessionId) {
+  const normalizedSession = ensureSessionDefaults(sessionId);
+  const audience = getSessionAudience(normalizedSession);
+  if (audience !== 'shared') {
+    return { blocked: false, text };
+  }
+  if (getSessionRevealGrant(normalizedSession)) {
+    return { blocked: false, text };
+  }
+  if (!looksLikePrivateRecall(text)) {
+    return { blocked: false, text };
+  }
+  return {
+    blocked: true,
+    text:
+      '**Privacy guard:** Shared mode is active. I can use transcript + open web only. Owner can run `/clawpilot reveal <category>` for one-time private recall.'
+  };
+}
+
+async function announceMeetingState(botId, sessionId) {
+  const normalized = ensureSessionDefaults(sessionId);
+  const message = [
+    `[MEETING CONTROL] ${getSessionCopilotName(normalized)} is ready.`,
+    `Mode: ${getSessionMode(normalized)}.`,
+    `Privacy audience: ${getSessionAudience(normalized)}.`,
+    'Commands: /clawpilot mode <name> | /clawpilot audience private|shared | /clawpilot privacy'
+  ].join(' ');
+  await sendVerboseMirrorToOpenClaw(message, { botId });
+}
+
 function persistBridgeState(reason = 'update') {
   if (!BRIDGE_STATE_FILE) return;
   if (bridgeStatePersistPending) return;
@@ -694,6 +945,30 @@ function persistBridgeState(reason = 'update') {
       route_targets: Array.from(routeTargetByBotId.entries()).map(([botId, routeTarget]) => ({
         bot_id: botId,
         route_target: routeTarget
+      })),
+      session_modes: Array.from(modeBySessionId.entries()).map(([session, mode]) => ({
+        session,
+        mode
+      })),
+      session_audiences: Array.from(audienceBySessionId.entries()).map(([session, audience]) => ({
+        session,
+        audience
+      })),
+      session_copilot_names: Array.from(copilotNameBySessionId.entries()).map(([session, copilot_name]) => ({
+        session,
+        copilot_name
+      })),
+      session_team_agents: Array.from(teamAgentBySessionId.entries()).map(([session, team_agent]) => ({
+        session,
+        team_agent: Boolean(team_agent)
+      })),
+      session_owner_bindings: Array.from(ownerBindingBySessionId.entries()).map(([session, owner_binding]) => ({
+        session,
+        owner_binding
+      })),
+      session_reveal_grants: Array.from(revealGrantBySessionId.entries()).map(([session, grant]) => ({
+        session,
+        grant
       }))
     };
     try {
@@ -716,6 +991,12 @@ function loadBridgeState() {
 
     meetingSessionByBotId.clear();
     routeTargetByBotId.clear();
+    modeBySessionId.clear();
+    audienceBySessionId.clear();
+    copilotNameBySessionId.clear();
+    teamAgentBySessionId.clear();
+    ownerBindingBySessionId.clear();
+    revealGrantBySessionId.clear();
 
     const meetingEntries = Array.isArray(parsed.meeting_sessions) ? parsed.meeting_sessions : [];
     for (const entry of meetingEntries) {
@@ -733,6 +1014,58 @@ function loadBridgeState() {
       routeTargetByBotId.set(botId, routeTarget);
     }
 
+    const modeEntries = Array.isArray(parsed.session_modes) ? parsed.session_modes : [];
+    for (const entry of modeEntries) {
+      const session = normalizeMeetingSessionId(entry?.session);
+      const mode = resolveModeOrDefault(entry?.mode);
+      if (!session || !mode) continue;
+      modeBySessionId.set(session, mode);
+    }
+
+    const audienceEntries = Array.isArray(parsed.session_audiences) ? parsed.session_audiences : [];
+    for (const entry of audienceEntries) {
+      const session = normalizeMeetingSessionId(entry?.session);
+      const audience = resolveAudienceOrDefault(entry?.audience);
+      if (!session || !audience) continue;
+      audienceBySessionId.set(session, audience);
+    }
+
+    const copilotEntries = Array.isArray(parsed.session_copilot_names) ? parsed.session_copilot_names : [];
+    for (const entry of copilotEntries) {
+      const session = normalizeMeetingSessionId(entry?.session);
+      const copilotName = normalizeName(entry?.copilot_name, '');
+      if (!session || !copilotName) continue;
+      copilotNameBySessionId.set(session, copilotName);
+    }
+
+    const teamEntries = Array.isArray(parsed.session_team_agents) ? parsed.session_team_agents : [];
+    for (const entry of teamEntries) {
+      const session = normalizeMeetingSessionId(entry?.session);
+      if (!session) continue;
+      teamAgentBySessionId.set(session, Boolean(entry?.team_agent));
+    }
+
+    const ownerEntries = Array.isArray(parsed.session_owner_bindings) ? parsed.session_owner_bindings : [];
+    for (const entry of ownerEntries) {
+      const session = normalizeMeetingSessionId(entry?.session);
+      const ownerBinding = normalizeOwnerBinding(entry?.owner_binding);
+      if (!session || !ownerBinding) continue;
+      ownerBindingBySessionId.set(session, ownerBinding);
+    }
+
+    const revealEntries = Array.isArray(parsed.session_reveal_grants) ? parsed.session_reveal_grants : [];
+    for (const entry of revealEntries) {
+      const session = normalizeMeetingSessionId(entry?.session);
+      const category = normalizeRevealCategory(entry?.grant?.category);
+      const remaining = Number(entry?.grant?.remaining || 0);
+      if (!session || !category || remaining <= 0) continue;
+      revealGrantBySessionId.set(session, {
+        category,
+        remaining: Math.max(1, Math.round(remaining)),
+        granted_at: typeof entry?.grant?.granted_at === 'string' ? entry.grant.granted_at : new Date().toISOString()
+      });
+    }
+
     const explicitRouteTarget = normalizeRouteTarget(parsed.active_route_target);
     if (explicitRouteTarget) {
       activeRouteTarget = explicitRouteTarget;
@@ -746,9 +1079,10 @@ function loadBridgeState() {
     } else {
       activeMeetingSessionId = Array.from(meetingSessionByBotId.values()).at(-1) || 'default';
     }
+    ensureSessionDefaults(activeMeetingSessionId);
 
     console.log(
-      `[BridgeState] loaded file=${BRIDGE_STATE_FILE} sessions=${meetingSessionByBotId.size} routes=${routeTargetByBotId.size}`
+      `[BridgeState] loaded file=${BRIDGE_STATE_FILE} sessions=${meetingSessionByBotId.size} routes=${routeTargetByBotId.size} modes=${modeBySessionId.size} audiences=${audienceBySessionId.size}`
     );
   } catch (error) {
     console.warn(`[BridgeState] load failed file=${BRIDGE_STATE_FILE} error=${error.message}`);
@@ -933,12 +1267,22 @@ function buildSafeLaunchResponse(raw = {}, fallback = {}) {
 
 // Health check
 app.get('/health', (req, res) => {
+  const session = ensureSessionDefaults(activeMeetingSessionId);
   res.json({
     status: 'ok',
     uptime: process.uptime(),
     muted: IS_MUTED,
     meetverbose: DEBUG_MODE,
+    session,
+    mode: getSessionMode(session),
+    audience: getSessionAudience(session),
+    copilot_name: getSessionCopilotName(session),
     proactivity: PROACTIVITY_LEVEL,
+    prompt: {
+      path: promptManager.getPromptPath(),
+      available_modes: getAvailableModes(),
+      default_mode: resolveModeOrDefault(promptManager.getDefaultMode())
+    },
     hook: {
       url: OPENCLAW_HOOK_URL,
       agent_url: OPENCLAW_AGENT_HOOK_URL,
@@ -975,9 +1319,18 @@ app.get('/mute-status', (req, res) => {
 });
 
 app.get('/copilot/status', requireBridgeAuth, (req, res) => {
+  const session = ensureSessionDefaults(getMeetingSessionId(req));
+  const revealGrant = getSessionRevealGrant(session);
   res.json({
+    session,
     muted: IS_MUTED,
     meetverbose: DEBUG_MODE,
+    mode: getSessionMode(session),
+    audience: getSessionAudience(session),
+    copilot_name: getSessionCopilotName(session),
+    team_agent: getSessionTeamAgent(session),
+    owner_bound: Boolean(getSessionOwnerBinding(session)),
+    reveal_grant: revealGrant || null,
     reaction_in_flight: reactionInFlight,
     queued_reaction: Boolean(queuedReaction),
     transcript_segments_buffered: transcriptBuffer.length,
@@ -1006,8 +1359,87 @@ app.get('/copilot/status', requireBridgeAuth, (req, res) => {
     telegram: {
       token_set: Boolean(TELEGRAM_BOT_TOKEN),
       token_source: TELEGRAM_BOT_TOKEN_SOURCE
+    },
+    prompt: {
+      path: promptManager.getPromptPath(),
+      available_modes: getAvailableModes(),
+      default_mode: resolveModeOrDefault(promptManager.getDefaultMode())
     }
   });
+});
+
+function buildPrivacyResponse(sessionId) {
+  const session = ensureSessionDefaults(sessionId);
+  return {
+    session,
+    audience: getSessionAudience(session),
+    team_agent: getSessionTeamAgent(session),
+    owner_bound: Boolean(getSessionOwnerBinding(session)),
+    reveal_grant: getSessionRevealGrant(session) || null
+  };
+}
+
+app.get('/copilot/mode', requireBridgeAuth, (req, res) => {
+  const session = ensureSessionDefaults(getMeetingSessionId(req));
+  res.json({
+    session,
+    mode: getSessionMode(session),
+    default_mode: resolveModeOrDefault(promptManager.getDefaultMode()),
+    available_modes: getAvailableModes()
+  });
+});
+
+app.post('/copilot/mode', requireBridgeAuth, (req, res) => {
+  const session = ensureSessionDefaults(getMeetingSessionId(req));
+  const requestedMode = normalizeMode(req.body?.mode);
+  if (!getAvailableModes().includes(requestedMode)) {
+    return res.status(400).json({
+      error: 'invalid mode',
+      available_modes: getAvailableModes()
+    });
+  }
+  const result = setSessionMode(session, requestedMode, 'http:/copilot/mode');
+  res.json(result);
+});
+
+app.get('/copilot/privacy', requireBridgeAuth, (req, res) => {
+  const session = ensureSessionDefaults(getMeetingSessionId(req));
+  res.json(buildPrivacyResponse(session));
+});
+
+app.post('/copilot/audience', requireBridgeAuth, (req, res) => {
+  const session = ensureSessionDefaults(getMeetingSessionId(req));
+  const requestedAudienceRaw = String(req.body?.audience || '').trim().toLowerCase();
+  const requestedAudience =
+    requestedAudienceRaw === 'shared'
+      ? 'shared'
+      : (requestedAudienceRaw === 'private' ? 'private' : '');
+  if (!['private', 'shared'].includes(requestedAudience)) {
+    return res.status(400).json({ error: 'invalid audience (expected private|shared)' });
+  }
+  setSessionAudience(session, requestedAudience, 'http:/copilot/audience');
+  res.json(buildPrivacyResponse(session));
+});
+
+app.post('/copilot/reveal', requireBridgeAuth, (req, res) => {
+  const session = ensureSessionDefaults(getMeetingSessionId(req));
+  const category = normalizeRevealCategory(req.body?.category);
+  if (!category) {
+    return res.status(400).json({
+      error: 'invalid category',
+      allowed_categories: Array.from(ALLOWED_REVEAL_CATEGORIES)
+    });
+  }
+  const ownerBinding = getSessionOwnerBinding(session);
+  if (!ownerBinding) {
+    return res.status(409).json({ error: 'owner binding not set for this session' });
+  }
+  const requester = normalizeOwnerBinding(req.body?.owner_binding);
+  if (!ownerBindingMatches(ownerBinding, requester)) {
+    return res.status(403).json({ error: 'owner authorization required' });
+  }
+  setSessionRevealGrant(session, category);
+  res.json(buildPrivacyResponse(session));
 });
 
 function extractMeetingTarget(meetingUrl) {
@@ -1087,6 +1519,7 @@ function rememberBotSession(botId, sessionId) {
   const normalized = normalizeMeetingSessionId(sessionId);
   meetingSessionByBotId.set(botId, normalized);
   activeMeetingSessionId = normalized;
+  ensureSessionDefaults(normalized);
   persistBridgeState('remember_session');
 }
 
@@ -1290,12 +1723,14 @@ async function waitForBotTerminal(botId, timeoutMs = BOT_REPLACE_WAIT_TIMEOUT_MS
 
 // Proxy endpoint to launch bots (avoids CORS)
 app.post('/launch', requireBridgeAuth, async (req, res) => {
-  const { meeting_url, language, provider, replace_active, bot_name, agent_name, route_target } = req.body;
+  const { meeting_url, language, provider, replace_active, bot_name, agent_name, route_target, owner_binding, team_agent } = req.body;
   
   if (!meeting_url) {
     return res.status(400).json({ error: 'meeting_url required' });
   }
   const requestedRouteTarget = normalizeRouteTarget(route_target);
+  const requestedOwnerBinding = normalizeOwnerBinding(owner_binding);
+  const requestedTeamAgent = Boolean(parseBooleanLike(team_agent, false));
   const launchSessionId = extractSessionFromMeetingValue(meeting_url) || activeMeetingSessionId;
 
   const shouldReplaceActive = typeof replace_active === 'boolean'
@@ -1347,6 +1782,12 @@ app.post('/launch', requireBridgeAuth, async (req, res) => {
   const lang = requestedLang === 'multi' ? 'auto' : requestedLang;
   const prov = provider || 'recallai_streaming';
   const resolvedBotName = resolveBotName({ requested: bot_name, agentName: agent_name });
+  ensureSessionDefaults(launchSessionId);
+  setSessionCopilotName(launchSessionId, resolvedBotName);
+  setSessionTeamAgent(launchSessionId, requestedTeamAgent);
+  if (requestedOwnerBinding) {
+    setSessionOwnerBinding(launchSessionId, requestedOwnerBinding);
+  }
 
   // Build provider config (must use exact provider names from Recall API)
   let transcriptConfig;
@@ -1402,7 +1843,8 @@ app.post('/launch', requireBridgeAuth, async (req, res) => {
       status: response.ok ? 'launch_requested' : 'launch_failed',
       meeting_url,
       meeting_session: normalizeMeetingSessionId(launchSessionId),
-      routing_target: effectiveRouteTarget || null
+      routing_target: effectiveRouteTarget || null,
+      bot_name: resolvedBotName
     };
     try {
       const json = JSON.parse(data);
@@ -1413,6 +1855,11 @@ app.post('/launch', requireBridgeAuth, async (req, res) => {
         rememberBotSession(json.id, launchSessionId);
         if (effectiveRouteTarget) {
           rememberBotRouteTarget(json.id, effectiveRouteTarget);
+        }
+        setSessionCopilotName(launchSessionId, resolvedBotName);
+        setSessionTeamAgent(launchSessionId, requestedTeamAgent);
+        if (requestedOwnerBinding) {
+          setSessionOwnerBinding(launchSessionId, requestedOwnerBinding);
         }
         launchFallback.id = json.id;
       }
@@ -1522,7 +1969,14 @@ async function handleBotStatus(event) {
         meetingStartByBot.set(botId, Number.isFinite(parsed) ? parsed : Date.now());
       }
       transcriptBuffer = []; // Reset buffer for new meeting
-      resetMeetingCanvasForSession(sessionIdFromEvent || (botId !== 'unknown' ? meetingSessionByBotId.get(botId) : null) || activeMeetingSessionId);
+      {
+        const sessionId = sessionIdFromEvent || (botId !== 'unknown' ? meetingSessionByBotId.get(botId) : null) || activeMeetingSessionId;
+        const normalizedSession = ensureSessionDefaults(sessionId);
+        resetMeetingCanvasForSession(normalizedSession);
+        if (botId !== 'unknown') {
+          await announceMeetingState(botId, normalizedSession);
+        }
+      }
       console.log(`[BotReady] ${botId} recording started`);
       break;
     case 'bot.joining_call':
@@ -1681,7 +2135,7 @@ async function handleRecallTranscript(data, isPartial, event) {
           default:
             break;
         }
-        await sendToOpenClaw(`[MEETING CONTROL] ${controlCommand.ack}`, { botId });
+        await sendToOpenClaw(`[MEETING CONTROL] ${controlCommand.ack}`, { botId, sessionId: eventSessionId });
         return;
       }
     }
@@ -1738,7 +2192,14 @@ async function handleRecallTranscript(data, isPartial, event) {
     
     const force = !isPartial && hasHighValueCue(text);
     if (!isPartial || REACT_ON_PARTIAL) {
-      await maybeReact({ webhookReceivedAtMs: nowMs, speechToWebhookMs: speechEndToWebhookMs, botId, isPartial, force });
+      await maybeReact({
+        webhookReceivedAtMs: nowMs,
+        speechToWebhookMs: speechEndToWebhookMs,
+        botId,
+        sessionId: eventSessionId,
+        isPartial,
+        force
+      });
     }
   }
 }
@@ -1764,7 +2225,7 @@ function buildReactionCandidate(meta = {}) {
     isPartial,
     meta,
     context,
-    contextKey: `${isPartial ? 'partial' : 'final'}:${context}`,
+    contextKey: `${normalizeSessionInput(meta.sessionId)}:${isPartial ? 'partial' : 'final'}:${context}`,
     createdAt: Date.now(),
     force
   };
@@ -1817,10 +2278,20 @@ async function runReaction(candidate, source) {
   );
 
   try {
+    const sessionId = ensureSessionDefaults(candidate.meta.sessionId || activeMeetingSessionId);
+    const promptInput = buildPromptInput(sessionId, candidate.context);
+    const renderedPrompt = promptManager.renderPrompt(promptInput);
+    if (renderedPrompt.error) {
+      console.warn(`[PromptLoader] ${renderedPrompt.error}`);
+    }
+    const hadRevealGrant = Boolean(getSessionRevealGrant(sessionId));
     const injectMs = await sendToOpenClaw(
-      `[MEETING TRANSCRIPT - Active copilot for meeting host]\n\n${candidate.context}\n\n---\nYou are a live meeting copilot coaching the host.\nReturn plain text only (no numbering, bullets, labels, or quotes).\nWrite one short interruption-worthy suggestion the host can say next.\nOptional: add one short follow-up question in the same message.\nKeep total under 32 words, concrete, and conversational.`,
-      { botId: candidate.meta.botId }
+      renderedPrompt.prompt,
+      { botId: candidate.meta.botId, sessionId }
     );
+    if (hadRevealGrant && getSessionAudience(sessionId) === 'shared') {
+      consumeSessionRevealGrant(sessionId);
+    }
     const webhookToInjectMs = candidate.meta.webhookReceivedAtMs
       ? Math.max(0, Date.now() - candidate.meta.webhookReceivedAtMs)
       : null;
@@ -1872,6 +2343,7 @@ async function reactImmediate(message) {
 
 async function sendToOpenClaw(message, options = {}) {
   const sendStart = Date.now();
+  const sessionId = ensureSessionDefaults(options.sessionId || activeMeetingSessionId);
   const routeTarget = resolveRouteTarget(options.routeTarget, options.botId);
   const routeText = formatRouteText(routeTarget, 'wake');
   const text = `[MEETING TRANSCRIPT]\n${message}`;
@@ -1882,12 +2354,17 @@ async function sendToOpenClaw(message, options = {}) {
     if (OPENCLAW_COPILOT_CLI_ROUTED && routeTarget?.channel && routeTarget?.to) {
       try {
         const copilotText = await generateCopilotTextViaCli(text, routeTarget);
-        await deliverTextViaCli(routeTarget, copilotText);
+        const guarded = applyPrivacyOutputGuard(copilotText, sessionId);
+        await deliverTextViaCli(routeTarget, guarded.text);
         const elapsed = Date.now() - sendStart;
         console.log(`[FastInject] ${elapsed}ms - delivered_cli route=${routeText}`);
         return elapsed;
       } catch (cliError) {
         console.warn(`[FastInject] cli path failed route=${routeText} error=${cliError.message} fallback=openclaw`);
+        if (getSessionAudience(sessionId) === 'shared') {
+          // In shared mode, avoid fallback model paths when the guarded CLI path fails.
+          return null;
+        }
       }
     }
 
@@ -2113,6 +2590,7 @@ app.listen(PORT, HOST, () => {
   console.log(`[OpenClawHook] wake=${OPENCLAW_HOOK_URL} agent=${OPENCLAW_AGENT_HOOK_URL}`);
   console.log(`[BridgeAuth] ${BRIDGE_AUTH_ENABLED ? 'enabled' : 'disabled'}${BRIDGE_AUTH_ENABLED ? '' : ' (set BRIDGE_API_TOKEN to enforce bearer auth on bridge control routes)'}`);
   console.log(`[OpenClawHook] token=${OPENCLAW_HOOK_TOKEN ? 'set' : 'missing'} url_source=${OPENCLAW_HOOK_URL_SOURCE} token_source=${OPENCLAW_HOOK_TOKEN_SOURCE}`);
+  console.log(`[Prompt] path=${promptManager.getPromptPath()} default_mode=${resolveModeOrDefault(promptManager.getDefaultMode())}`);
   if (!OPENCLAW_HOOK_TOKEN) {
     console.warn(`[OpenClawHook] token missing. Configure hooks.token in ${OPENCLAW_HOOK_DEFAULTS.configPath}`);
   }

@@ -26,6 +26,10 @@ Success criteria:
 - `/clawpilot pause`
 - `/clawpilot resume`
 - `/clawpilot transcript on|off`
+- `/clawpilot mode [name]`
+- `/clawpilot audience private|shared`
+- `/clawpilot privacy`
+- `/clawpilot reveal <category>`
 
 2. Bridge HTTP interface:
 - `GET /health`
@@ -36,6 +40,11 @@ Success criteria:
 - `POST /unmute`
 - `POST /meetverbose/on`
 - `POST /meetverbose/off`
+- `GET /copilot/mode`
+- `POST /copilot/mode`
+- `GET /copilot/privacy`
+- `POST /copilot/audience`
+- `POST /copilot/reveal`
 - `GET /meeting`
 - `GET /meeting/state`
 - `GET /meeting/stream`
@@ -99,7 +108,12 @@ Success criteria:
 | B-10 | Transcript on | Send `/clawpilot transcript on` | Transcript mirror ON confirmation |
 | B-11 | Transcript off | Send `/clawpilot transcript off` | Transcript mirror OFF confirmation |
 | B-12 | Unknown subcommand | Send `/clawpilot nope` | Unknown command + help |
-| B-13 | Bridge unavailable handling | Stop bridge temporarily; send `/clawpilot status` | User-friendly command failed message |
+| B-13 | Mode status | Send `/clawpilot mode` | Current mode + available modes shown |
+| B-14 | Mode set | Send `/clawpilot mode brainstorm` | Mode updated confirmation |
+| B-15 | Audience set shared | Send `/clawpilot audience shared` | Shared audience confirmation |
+| B-16 | Privacy status | Send `/clawpilot privacy` | Owner binding + reveal status shown |
+| B-17 | Reveal grant | Owner sends `/clawpilot reveal context` | One-time reveal grant confirmed |
+| B-18 | Bridge unavailable handling | Stop bridge temporarily; send `/clawpilot status` | User-friendly command failed message |
 
 ### C. Cross-Chat Routing Correctness
 

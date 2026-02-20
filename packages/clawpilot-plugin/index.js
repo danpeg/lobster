@@ -64,7 +64,8 @@ function loadBridgeConfig(api) {
   const allowRemoteBridge = Boolean(pluginCfg.allowRemoteBridge);
   const bridgeBaseUrl = normalizeBridgeBaseUrl(pluginCfg.bridgeBaseUrl || DEFAULT_BRIDGE_URL, allowRemoteBridge);
   const bridgeToken = pluginCfg.bridgeToken || '';
-  return { bridgeBaseUrl, bridgeToken };
+  const teamAgent = Boolean(pluginCfg.teamAgent);
+  return { bridgeBaseUrl, bridgeToken, teamAgent };
 }
 
 function extractMeetingUrl(text) {
@@ -121,10 +122,26 @@ function buildHelpText() {
     '/clawpilot transcript off',
     '  Toggle raw transcript mirroring in active chat channel.',
     '',
+    '/clawpilot mode',
+    '/clawpilot mode <balanced|brainstorm|weekly|standup|sales|catchup>',
+    '  Show or set meeting copilot mode.',
+    '',
+    '/clawpilot audience <private|shared>',
+    '  Set privacy audience policy for the active meeting.',
+    '',
+    '/clawpilot privacy',
+    '  Show privacy state, owner binding, and reveal status.',
+    '',
+    '/clawpilot reveal <commitments|contacts|context|notes>',
+    '  Owner-only one-time reveal grant for shared mode.',
+    '',
     'Examples:',
     '/clawpilot join https://meet.google.com/abc-defg-hij',
     '/clawpilot join https://meet.google.com/abc-defg-hij --name "Sunny Note Taker"',
     '/clawpilot transcript on',
+    '/clawpilot mode brainstorm',
+    '/clawpilot audience shared',
+    '/clawpilot reveal context',
   ].join('\n');
 }
 
@@ -209,6 +226,51 @@ function summarizeRouteContext(ctx) {
   };
 }
 
+function buildOwnerBinding(ctx) {
+  const channel = sanitizeAgentName(ctx?.channelId || ctx?.channel).toLowerCase();
+  const to = sanitizeAgentName(ctx?.to || ctx?.from);
+  if (!channel || !to) return null;
+  const ownerBinding = {
+    channel,
+    to,
+  };
+  const accountId = sanitizeAgentName(ctx?.accountId);
+  if (accountId) ownerBinding.accountId = accountId;
+  const senderId = sanitizeAgentName(ctx?.senderId || ctx?.from);
+  if (senderId) ownerBinding.senderId = senderId;
+  return ownerBinding;
+}
+
+function formatModeStatus(response) {
+  const session = sanitizeAgentName(response?.session || 'default');
+  const mode = sanitizeAgentName(response?.mode || '');
+  const defaultMode = sanitizeAgentName(response?.default_mode || '');
+  const modes = Array.isArray(response?.available_modes) ? response.available_modes.join(', ') : '';
+  return [
+    `Session: ${session}`,
+    `Mode: ${mode || 'unknown'}`,
+    defaultMode ? `Default mode: ${defaultMode}` : '',
+    modes ? `Available modes: ${modes}` : '',
+  ].filter(Boolean).join('\n');
+}
+
+function formatPrivacyStatus(response) {
+  const session = sanitizeAgentName(response?.session || 'default');
+  const audience = sanitizeAgentName(response?.audience || 'private');
+  const ownerBound = response?.owner_bound ? 'yes' : 'no';
+  const reveal = response?.reveal_grant?.category
+    ? `${sanitizeAgentName(response.reveal_grant.category)} (${Number(response.reveal_grant.remaining || 0)} remaining)`
+    : 'none';
+  const teamAgent = response?.team_agent ? 'yes' : 'no';
+  return [
+    `Session: ${session}`,
+    `Audience: ${audience}`,
+    `Team agent: ${teamAgent}`,
+    `Owner bound: ${ownerBound}`,
+    `Reveal grant: ${reveal}`,
+  ].join('\n');
+}
+
 async function callBridge(api, path, options = 'GET') {
   let method = 'GET';
   let body;
@@ -244,7 +306,7 @@ async function callBridge(api, path, options = 'GET') {
 export default function register(api) {
   api.registerCommand({
     name: 'clawpilot',
-    description: 'Control ClawPilot: help | status | join | pause | resume | transcript on|off',
+    description: 'Control ClawPilot: help | status | join | pause | resume | transcript | mode | audience | privacy | reveal',
     acceptsArgs: true,
     handler: async (ctx) => {
       const rawArgs = (ctx.args || '').trim();
@@ -278,12 +340,16 @@ export default function register(api) {
 
           const payload = { meeting_url: parsed.meetingUrl };
           const routeTarget = buildRouteTarget(ctx);
+          const ownerBinding = buildOwnerBinding(ctx);
+          const { teamAgent } = loadBridgeConfig(api);
           if (routeTarget) {
             console.log(`[ClawPilot] route_target resolved ${JSON.stringify(routeTarget)}`);
           } else {
             console.warn(`[ClawPilot] route_target missing ctx=${JSON.stringify(summarizeRouteContext(ctx))}`);
           }
           if (routeTarget) payload.route_target = routeTarget;
+          if (ownerBinding) payload.owner_binding = ownerBinding;
+          payload.team_agent = teamAgent;
           if (parsed.botName) payload.bot_name = parsed.botName;
           if (!parsed.botName) {
             const agentName = inferAgentName(api, ctx);
@@ -320,6 +386,63 @@ export default function register(api) {
               '/clawpilot transcript off',
             ].join('\n'),
           };
+        }
+
+        if (action === 'mode') {
+          const requested = (rest[0] || '').toLowerCase();
+          if (!requested || requested === 'status' || requested === 'get' || requested === 'list') {
+            const modeStatus = await callBridge(api, '/copilot/mode');
+            return { text: `Copilot mode:\n${formatModeStatus(modeStatus)}` };
+          }
+          const result = await callBridge(api, '/copilot/mode', {
+            method: 'POST',
+            body: { mode: requested },
+          });
+          return { text: `Mode updated.\n${formatModeStatus(result)}` };
+        }
+
+        if (action === 'audience') {
+          const requested = (rest[0] || '').toLowerCase();
+          if (!requested) {
+            return {
+              text: [
+                'Usage:',
+                '/clawpilot audience private',
+                '/clawpilot audience shared',
+              ].join('\n'),
+            };
+          }
+          const result = await callBridge(api, '/copilot/audience', {
+            method: 'POST',
+            body: { audience: requested },
+          });
+          return { text: `Audience updated.\n${formatPrivacyStatus(result)}` };
+        }
+
+        if (action === 'privacy') {
+          const status = await callBridge(api, '/copilot/privacy');
+          return { text: `Copilot privacy:\n${formatPrivacyStatus(status)}` };
+        }
+
+        if (action === 'reveal') {
+          const category = (rest[0] || '').toLowerCase();
+          if (!category) {
+            return {
+              text: [
+                'Usage:',
+                '/clawpilot reveal commitments',
+                '/clawpilot reveal contacts',
+                '/clawpilot reveal context',
+                '/clawpilot reveal notes',
+              ].join('\n'),
+            };
+          }
+          const ownerBinding = buildOwnerBinding(ctx);
+          const result = await callBridge(api, '/copilot/reveal', {
+            method: 'POST',
+            body: { category, owner_binding: ownerBinding || {} },
+          });
+          return { text: `Reveal granted.\n${formatPrivacyStatus(result)}` };
         }
 
         return {

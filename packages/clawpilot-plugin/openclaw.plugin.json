@@ -16,7 +16,11 @@
       },
       "agentName": {
         "type": "string",
-        "description": "Optional agent name used for default bot naming (<agent> Note Taker)"
+        "description": "Optional agent name used for default bot naming"
+      },
+      "teamAgent": {
+        "type": "boolean",
+        "description": "Treat this copilot as a team agent (shared-safe team context rules)."
       },
       "allowRemoteBridge": {
         "type": "boolean",
@@ -36,6 +40,10 @@
     "agentName": {
       "label": "Agent Name",
       "help": "Optional fallback for bot naming if runtime context has no agent name."
+    },
+    "teamAgent": {
+      "label": "Team Agent",
+      "help": "Enable when this copilot serves a team workspace rather than a personal owner context."
     },
     "allowRemoteBridge": {
       "label": "Allow Remote Bridge",

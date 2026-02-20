@@ -59,11 +59,10 @@ resolve_bot_name() {
   fi
 
   local agent_name="${OPENCLAW_AGENT_NAME:-${CLAW_AGENT_NAME:-${AGENT_NAME:-OpenClaw}}}"
-  local suffix="${RECALL_BOT_NAME_SUFFIX:-Note Taker}"
   local combined
-  combined="$(sanitize_bot_name "${agent_name} ${suffix}")"
+  combined="$(sanitize_bot_name "${agent_name}")"
   if [[ -z "$combined" ]]; then
-    combined="OpenClaw Note Taker"
+    combined="OpenClaw"
   fi
   printf '%.80s' "$combined"
 }

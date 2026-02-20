@@ -6,7 +6,7 @@ Express service that receives Recall.ai webhook events and forwards transcript-d
 
 - Recall bot launch endpoint (`/launch`)
 - Recall webhook receiver (`/webhook`)
-- Copilot control endpoints (`/copilot/status`, `/mute`, `/unmute`, `/meetverbose/*`)
+- Copilot control endpoints (`/copilot/status`, `/copilot/mode`, `/copilot/privacy`, `/copilot/audience`, `/copilot/reveal`, `/mute`, `/unmute`, `/meetverbose/*`)
 - No browser launcher UI; launch is API/chat-driven only
 - Optional integrations on `experimental` branch:
   - Notion transcript mirroring
@@ -43,6 +43,11 @@ Protected routes when `BRIDGE_API_TOKEN` is set:
 - `POST /unmute`
 - `POST /meetverbose/on`
 - `POST /meetverbose/off`
+- `GET /copilot/mode`
+- `POST /copilot/mode`
+- `GET /copilot/privacy`
+- `POST /copilot/audience`
+- `POST /copilot/reveal`
 - `GET /meeting`
 - `GET /meeting/state`
 - `GET /meeting/stream`
@@ -60,9 +65,8 @@ Migration note:
 
 ## Optional Bot Naming
 
-- `OPENCLAW_AGENT_NAME` -> default bot name becomes `<OPENCLAW_AGENT_NAME> Note Taker`
+- `OPENCLAW_AGENT_NAME` -> default bot name becomes `<OPENCLAW_AGENT_NAME>`
 - `RECALL_BOT_NAME` -> explicit override
-- `RECALL_BOT_NAME_SUFFIX` -> defaults to `Note Taker`
 
 ## Optional Discord Delivery
 
@@ -88,6 +92,15 @@ Migration note:
 - Reactions are final-transcript driven by default (`REACT_ON_PARTIAL=false`)
 - Output is a single natural coaching line (no forced numbered format)
 - Default proactivity is `high` for faster, more frequent suggestions
+
+## Prompt Personalization
+
+- The meeting copilot prompt now lives in:
+  - `services/clawpilot-bridge/prompts/lobster.md`
+- You can edit this markdown file to customize behavior, mode overlays, and privacy phrasing.
+- Prompt changes are auto-reloaded (no bridge restart required).
+- Override prompt file path with:
+  - `LOBSTER_PROMPT_PATH=/absolute/path/to/prompt.md`
 
 ## Verbose Mode Behavior
 
