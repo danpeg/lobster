@@ -6,7 +6,7 @@ Express service that receives Recall.ai webhook events and forwards transcript-d
 
 - Recall bot launch endpoint (`/launch`)
 - Recall webhook receiver (`/webhook`)
-- Copilot control endpoints (`/copilot/status`, `/copilot/mode`, `/copilot/privacy`, `/copilot/audience`, `/copilot/reveal`, `/mute`, `/unmute`, `/meetverbose/*`)
+- Copilot control endpoints (`/copilot/status`, `/copilot/mode`, `/copilot/privacy`, `/copilot/audience`, `/mute`, `/unmute`, `/meetverbose/*`)
 - No browser launcher UI; launch is API/chat-driven only
 - Optional integrations on `experimental` branch:
   - Notion transcript mirroring
@@ -47,7 +47,6 @@ Protected routes when `BRIDGE_API_TOKEN` is set:
 - `POST /copilot/mode`
 - `GET /copilot/privacy`
 - `POST /copilot/audience`
-- `POST /copilot/reveal`
 - `GET /meeting`
 - `GET /meeting/state`
 - `GET /meeting/stream`
@@ -55,6 +54,24 @@ Protected routes when `BRIDGE_API_TOKEN` is set:
 Migration note:
 
 - If `/clawpilot` commands start returning `401`, set plugin config `bridgeToken` to match `BRIDGE_API_TOKEN`.
+- Plugin uninstall/reinstall can remove plugin config values, including `bridgeToken`; re-sync after lifecycle operations.
+- The legacy reveal grant feature was removed. Shared audience mode never allows private recall overrides.
+
+Recovery commands:
+
+```bash
+set -a; source /root/.recall-env; set +a
+openclaw config set plugins.entries.clawpilot.config.bridgeToken "$BRIDGE_API_TOKEN"
+openclaw config set plugins.entries.clawpilot.config.bridgeBaseUrl "http://127.0.0.1:3001"
+openclaw daemon restart
+```
+
+If using `/Users/danpeguine/Projects/clawpilot-vps-cycle.sh`, auth-alignment defaults are:
+
+- `BRIDGE_TOKEN_ENV_FILE=/root/.recall-env`
+- `BRIDGE_BASE_URL_DEFAULT=http://127.0.0.1:3001`
+- `SYNC_PLUGIN_BRIDGE_TOKEN=true`
+- `BRIDGE_AUTH_PREFLIGHT=true`
 
 ## OpenClaw Configuration Source
 

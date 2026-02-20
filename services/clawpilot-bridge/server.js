@@ -177,7 +177,6 @@ const LOBSTER_PROMPT_PATH = path.resolve(
   process.env.LOBSTER_PROMPT_PATH || path.join(__dirname, 'prompts', 'lobster.md')
 );
 const promptManager = createPromptManager({ promptPath: LOBSTER_PROMPT_PATH });
-const ALLOWED_REVEAL_CATEGORIES = new Set(['commitments', 'contacts', 'context', 'notes']);
 const DEFAULT_MEETING_START_PROMPT = [
   '**{{COPILOT_NAME}} is on the way — admit me! 🐡**',
   '',
@@ -744,7 +743,6 @@ const teamAgentBySessionId = new Map(); // session id -> boolean
 const audienceBySessionId = new Map(); // session id -> private|shared
 const modeBySessionId = new Map(); // session id -> mode name
 const ownerBindingBySessionId = new Map(); // session id -> owner identity tuple
-const revealGrantBySessionId = new Map(); // session id -> { category, remaining, granted_at }
 let activeMeetingSessionId = 'default';
 let activeRouteTarget = null;
 let bridgeStatePersistPending = false;
@@ -805,11 +803,6 @@ function ownerBindingMatches(expected, received) {
     return left.senderId === (right.senderId || '');
   }
   return true;
-}
-
-function normalizeRevealCategory(value) {
-  const normalized = String(value || '').trim().toLowerCase();
-  return ALLOWED_REVEAL_CATEGORIES.has(normalized) ? normalized : '';
 }
 
 function getAvailableModes() {
@@ -920,54 +913,6 @@ function getSessionOwnerBinding(sessionId) {
   return ownerBindingBySessionId.get(normalized) || null;
 }
 
-function setSessionRevealGrant(sessionId, category) {
-  const normalized = ensureSessionDefaults(sessionId);
-  const cleanCategory = normalizeRevealCategory(category);
-  if (!cleanCategory) return null;
-  const grant = {
-    category: cleanCategory,
-    remaining: 1,
-    granted_at: new Date().toISOString()
-  };
-  revealGrantBySessionId.set(normalized, grant);
-  persistBridgeState('reveal_grant');
-  return grant;
-}
-
-function getSessionRevealGrant(sessionId) {
-  const normalized = normalizeSessionInput(sessionId);
-  const grant = revealGrantBySessionId.get(normalized);
-  if (!grant) return null;
-  const remaining = Number(grant.remaining || 0);
-  if (remaining <= 0) return null;
-  return { ...grant, remaining };
-}
-
-function consumeSessionRevealGrant(sessionId) {
-  const normalized = normalizeSessionInput(sessionId);
-  const grant = revealGrantBySessionId.get(normalized);
-  if (!grant) return;
-  const remaining = Math.max(0, Number(grant.remaining || 0) - 1);
-  if (remaining <= 0) {
-    revealGrantBySessionId.delete(normalized);
-  } else {
-    revealGrantBySessionId.set(normalized, { ...grant, remaining });
-  }
-  persistBridgeState('reveal_consume');
-}
-
-function buildRevealBlock(sessionId) {
-  const grant = getSessionRevealGrant(sessionId);
-  if (!grant) {
-    return '';
-  }
-  return [
-    `Owner approved one-time reveal grant for category: ${grant.category}.`,
-    'You may include only minimal details for this single response.',
-    'After this response, return to normal privacy restrictions.'
-  ].join('\n');
-}
-
 function buildPromptInput(sessionId, meetingContext) {
   const normalized = ensureSessionDefaults(sessionId);
   return {
@@ -975,8 +920,7 @@ function buildPromptInput(sessionId, meetingContext) {
     meetingContext,
     mode: getSessionMode(normalized),
     audience: getSessionAudience(normalized),
-    teamAgent: getSessionTeamAgent(normalized),
-    revealBlock: buildRevealBlock(normalized)
+    teamAgent: getSessionTeamAgent(normalized)
   };
 }
 
@@ -992,16 +936,12 @@ function applyPrivacyOutputGuard(text, sessionId) {
   if (audience !== 'shared') {
     return { blocked: false, text };
   }
-  if (getSessionRevealGrant(normalizedSession)) {
-    return { blocked: false, text };
-  }
   if (!looksLikePrivateRecall(text)) {
     return { blocked: false, text };
   }
   return {
     blocked: true,
-    text:
-      '**Privacy guard:** Shared mode is active. I can use transcript + open web only. Owner can run `/clawpilot reveal <category>` for one-time private recall.'
+    text: '**Privacy guard:** Shared mode is active. I can use transcript + open web only; private recall is unavailable in shared mode.'
   };
 }
 
@@ -1129,10 +1069,6 @@ function persistBridgeState(reason = 'update') {
       session_owner_bindings: Array.from(ownerBindingBySessionId.entries()).map(([session, owner_binding]) => ({
         session,
         owner_binding
-      })),
-      session_reveal_grants: Array.from(revealGrantBySessionId.entries()).map(([session, grant]) => ({
-        session,
-        grant
       }))
     };
     try {
@@ -1170,7 +1106,6 @@ function loadBridgeState() {
     copilotNameBySessionId.clear();
     teamAgentBySessionId.clear();
     ownerBindingBySessionId.clear();
-    revealGrantBySessionId.clear();
 
     const meetingEntries = Array.isArray(parsed.meeting_sessions) ? parsed.meeting_sessions : [];
     for (const entry of meetingEntries) {
@@ -1225,19 +1160,6 @@ function loadBridgeState() {
       const ownerBinding = normalizeOwnerBinding(entry?.owner_binding);
       if (!session || !ownerBinding) continue;
       ownerBindingBySessionId.set(session, ownerBinding);
-    }
-
-    const revealEntries = Array.isArray(parsed.session_reveal_grants) ? parsed.session_reveal_grants : [];
-    for (const entry of revealEntries) {
-      const session = normalizeMeetingSessionId(entry?.session);
-      const category = normalizeRevealCategory(entry?.grant?.category);
-      const remaining = Number(entry?.grant?.remaining || 0);
-      if (!session || !category || remaining <= 0) continue;
-      revealGrantBySessionId.set(session, {
-        category,
-        remaining: Math.max(1, Math.round(remaining)),
-        granted_at: typeof entry?.grant?.granted_at === 'string' ? entry.grant.granted_at : new Date().toISOString()
-      });
     }
 
     const explicitRouteTarget = normalizeRouteTarget(parsed.active_route_target);
@@ -1496,7 +1418,6 @@ app.get('/mute-status', (req, res) => {
 
 app.get('/copilot/status', requireBridgeAuth, (req, res) => {
   const session = ensureSessionDefaults(getMeetingSessionId(req));
-  const revealGrant = getSessionRevealGrant(session);
   res.json({
     session,
     muted: IS_MUTED,
@@ -1506,7 +1427,6 @@ app.get('/copilot/status', requireBridgeAuth, (req, res) => {
     copilot_name: getSessionCopilotName(session),
     team_agent: getSessionTeamAgent(session),
     owner_bound: Boolean(getSessionOwnerBinding(session)),
-    reveal_grant: revealGrant || null,
     reaction_in_flight: reactionInFlight,
     queued_reaction: Boolean(queuedReaction),
     transcript_segments_buffered: transcriptBuffer.length,
@@ -1550,8 +1470,7 @@ function buildPrivacyResponse(sessionId) {
     session,
     audience: getSessionAudience(session),
     team_agent: getSessionTeamAgent(session),
-    owner_bound: Boolean(getSessionOwnerBinding(session)),
-    reveal_grant: getSessionRevealGrant(session) || null
+    owner_bound: Boolean(getSessionOwnerBinding(session))
   };
 }
 
@@ -1696,27 +1615,6 @@ app.post('/copilot/startup-input', requireBridgeAuth, async (req, res) => {
       ? { invalid_mode: intent.invalidMode, available_modes: availableModes }
       : {})
   });
-});
-
-app.post('/copilot/reveal', requireBridgeAuth, (req, res) => {
-  const session = ensureSessionDefaults(getMeetingSessionId(req));
-  const category = normalizeRevealCategory(req.body?.category);
-  if (!category) {
-    return res.status(400).json({
-      error: 'invalid category',
-      allowed_categories: Array.from(ALLOWED_REVEAL_CATEGORIES)
-    });
-  }
-  const ownerBinding = getSessionOwnerBinding(session);
-  if (!ownerBinding) {
-    return res.status(409).json({ error: 'owner binding not set for this session' });
-  }
-  const requester = normalizeOwnerBinding(req.body?.owner_binding);
-  if (!ownerBindingMatches(ownerBinding, requester)) {
-    return res.status(403).json({ error: 'owner authorization required' });
-  }
-  setSessionRevealGrant(session, category);
-  res.json(buildPrivacyResponse(session));
 });
 
 function extractMeetingTarget(meetingUrl) {
@@ -2563,14 +2461,10 @@ async function runReaction(candidate, source) {
     if (renderedPrompt.error) {
       console.warn(`[PromptLoader] ${renderedPrompt.error}`);
     }
-    const hadRevealGrant = Boolean(getSessionRevealGrant(sessionId));
     const injectMs = await sendToOpenClaw(
       renderedPrompt.prompt,
       { botId: candidate.meta.botId, sessionId }
     );
-    if (hadRevealGrant && getSessionAudience(sessionId) === 'shared') {
-      consumeSessionRevealGrant(sessionId);
-    }
     const webhookToInjectMs = candidate.meta.webhookReceivedAtMs
       ? Math.max(0, Date.now() - candidate.meta.webhookReceivedAtMs)
       : null;

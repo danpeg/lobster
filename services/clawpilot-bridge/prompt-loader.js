@@ -111,7 +111,6 @@ function createPromptManager(options = {}) {
     const meetingContext = String(input.meetingContext || '').trim();
     const mode = normalizeMode(input.mode) || readDefaultMode(cachedSections) || FALLBACK_MODE;
     const audience = normalizeAudience(input.audience || FALLBACK_AUDIENCE);
-    const revealBlock = String(input.revealBlock || '').trim() || getSection('REVEAL:default');
     const modeBlock = getModeBlock(mode);
     const audienceBlock = getAudienceBlock(audience);
     const teamAgentBlock = getTeamAgentBlock(Boolean(input.teamAgent));
@@ -141,7 +140,7 @@ function createPromptManager(options = {}) {
       .replaceAll('{{MODE_BLOCK}}', modeBlock)
       .replaceAll('{{AUDIENCE_BLOCK}}', audienceBlock)
       .replaceAll('{{TEAM_AGENT_BLOCK}}', teamAgentBlock)
-      .replaceAll('{{REVEAL_BLOCK}}', revealBlock);
+      .replaceAll('{{REVEAL_BLOCK}}', '');
 
     return {
       prompt: rendered,

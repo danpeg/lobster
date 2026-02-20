@@ -16,6 +16,12 @@ bash ./scripts/qa-init-run.sh
 bash ./scripts/qa-quick-checks.sh
 ```
 
+Optional VPS auth preflight (checks bridge auth alignment and writes `bridge-auth-check.log`):
+
+```bash
+RUN_VPS_AUTH_CHECK=true bash ./scripts/qa-quick-checks.sh
+```
+
 3. Execute test cases from:
 
 `qa/prelaunch-manual-test-plan.md`

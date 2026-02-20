@@ -45,7 +45,7 @@ done
 
 # Per-channel command matrix and live/routing
 for channel in telegram whatsapp discord; do
-  for case_id in B-01 B-02 B-03 B-04 B-05 B-06 B-07 B-08 B-09 B-10 B-11 B-12 B-13 C-01 C-03 D-01 D-02 D-03 D-04 D-05; do
+  for case_id in B-01 B-02 B-03 B-04 B-05 B-06 B-07 B-08 B-09 B-10 B-11 B-12 B-13 B-14 B-15 B-16 B-17 B-18 C-01 C-03 D-01 D-02 D-03 D-04 D-05; do
     append_row "$channel" "dm" "$case_id"
   done
 

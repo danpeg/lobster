@@ -55,6 +55,23 @@ Routing is channel-agnostic by default (via OpenClaw hooks). Discord direct deli
 Plugin auth alignment:
 
 - Configure plugin `bridgeToken` to exactly match `BRIDGE_API_TOKEN` once bridge auth is enabled.
+- Plugin uninstall/reinstall can clear `plugins.entries.clawpilot.config.*`; always re-check `bridgeToken` alignment after lifecycle operations.
+
+Bridge token recovery (VPS):
+
+```bash
+set -a; source /root/.recall-env; set +a
+openclaw config set plugins.entries.clawpilot.config.bridgeToken "$BRIDGE_API_TOKEN"
+openclaw config set plugins.entries.clawpilot.config.bridgeBaseUrl "http://127.0.0.1:3001"
+openclaw daemon restart
+```
+
+Private VPS deploy auth guard knobs (`/Users/danpeguine/Projects/clawpilot-vps-cycle.sh`):
+
+1. `BRIDGE_TOKEN_ENV_FILE` (default: `/root/.recall-env`)
+2. `BRIDGE_BASE_URL_DEFAULT` (default: `http://127.0.0.1:3001`)
+3. `SYNC_PLUGIN_BRIDGE_TOKEN=true|false` (default: `true`)
+4. `BRIDGE_AUTH_PREFLIGHT=true|false` (default: `true`)
 
 ## Verify End-to-End
 
@@ -90,7 +107,6 @@ Mode and privacy controls:
 /clawpilot audience private
 /clawpilot audience shared
 /clawpilot privacy
-/clawpilot reveal context
 ```
 5. Confirm transcripts trigger copilot responses.
 
@@ -129,5 +145,7 @@ See `RELEASING.md` for full steps.
    restart OpenClaw daemon and run `openclaw plugins doctor`
 2. No copilot reaction:
    verify bridge `.env` values and check bridge logs
-3. Recall webhook failures:
+3. `/clawpilot` returns `Bridge call failed (401): Unauthorized`:
+   bridge auth is enabled but plugin token is missing/mismatched; re-sync `bridgeToken` to `BRIDGE_API_TOKEN` and restart daemon
+4. Recall webhook failures:
    confirm `WEBHOOK_BASE_URL` is public HTTPS and reachable from Recall.ai

@@ -29,7 +29,6 @@ Success criteria:
 - `/clawpilot mode [name]`
 - `/clawpilot audience private|shared`
 - `/clawpilot privacy`
-- `/clawpilot reveal <category>`
 
 2. Bridge HTTP interface:
 - `GET /health`
@@ -44,7 +43,6 @@ Success criteria:
 - `POST /copilot/mode`
 - `GET /copilot/privacy`
 - `POST /copilot/audience`
-- `POST /copilot/reveal`
 - `GET /meeting`
 - `GET /meeting/state`
 - `GET /meeting/stream`
@@ -111,8 +109,8 @@ Success criteria:
 | B-13 | Mode status | Send `/clawpilot mode` | Current mode + available modes shown |
 | B-14 | Mode set | Send `/clawpilot mode brainstorm` | Mode updated confirmation |
 | B-15 | Audience set shared | Send `/clawpilot audience shared` | Shared audience confirmation |
-| B-16 | Privacy status | Send `/clawpilot privacy` | Owner binding + reveal status shown |
-| B-17 | Reveal grant | Owner sends `/clawpilot reveal context` | One-time reveal grant confirmed |
+| B-16 | Privacy status | Send `/clawpilot privacy` | Owner binding + audience policy shown |
+| B-17 | Reveal command retired | Send `/clawpilot reveal context` | Unknown command + help shown |
 | B-18 | Bridge unavailable handling | Stop bridge temporarily; send `/clawpilot status` | User-friendly command failed message |
 
 ### C. Cross-Chat Routing Correctness
