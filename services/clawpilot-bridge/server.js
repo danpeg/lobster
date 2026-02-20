@@ -179,9 +179,28 @@ const LOBSTER_PROMPT_PATH = path.resolve(
 const promptManager = createPromptManager({ promptPath: LOBSTER_PROMPT_PATH });
 const ALLOWED_REVEAL_CATEGORIES = new Set(['commitments', 'contacts', 'context', 'notes']);
 const DEFAULT_MEETING_START_PROMPT = [
-  '**{{COPILOT_NAME}} is ready for this meeting.**',
-  'Defaults now: mode=`{{ACTIVE_MODE}}`, audience=`{{ACTIVE_AUDIENCE}}`.',
-  'Change anytime with plain text (`mode brainstorm`, `audience shared`) or `/clawpilot privacy`.'
+  '**{{COPILOT_NAME}} is on the way — admit me! 🐡**',
+  '',
+  "I'll capture the good stuff and jump in when I can help. Just talk, I've got you.",
+  '',
+  '---',
+  '',
+  '**🎛️ Mode** — How active should I be?',
+  '',
+  '• 🔇 **silent** — I listen but stay quiet (review later)',
+  '• ⚖️ **balanced** — I chime in when it matters *(current)*',
+  '• 🔥 **active** — Full copilot energy (brainstorms, deal rooms)',
+  '',
+  '**👥 Audience** — Who can see?',
+  '',
+  '• 🔒 **private** — Just you, I can use your full context *(current)*',
+  '• 👀 **shared** — Others here, I keep personal stuff locked',
+  '',
+  '---',
+  '',
+  '**Change anytime:** `mode silent` or `audience shared`',
+  '',
+  'Current: **{{ACTIVE_MODE}}** mode, **{{ACTIVE_AUDIENCE}}** audience'
 ].join('\n');
 let cachedMeetingStartPrompt = null;
 
