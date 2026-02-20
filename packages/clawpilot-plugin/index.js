@@ -254,6 +254,54 @@ function formatModeStatus(response) {
   ].filter(Boolean).join('\n');
 }
 
+function formatStatusResponse(status) {
+  if (!status || typeof status !== 'object' || Array.isArray(status)) {
+    return String(status || 'unknown');
+  }
+
+  const session = sanitizeAgentName(status?.session || 'default');
+  const mode = sanitizeAgentName(status?.mode || '');
+  const audience = sanitizeAgentName(status?.audience || 'private');
+  const copilotName = sanitizeAgentName(status?.copilot_name || '');
+  const reveal = status?.reveal_grant?.category
+    ? `${sanitizeAgentName(status.reveal_grant.category)} (${Number(status.reveal_grant.remaining || 0)} remaining)`
+    : 'none';
+  const defaultMode = sanitizeAgentName(status?.prompt?.default_mode || '');
+  const modes = Array.isArray(status?.prompt?.available_modes) ? status.prompt.available_modes.join(', ') : '';
+  const bufferedSegmentCount = Number(status?.transcript_segments_buffered);
+  const bufferedSegments = Number.isFinite(bufferedSegmentCount) ? bufferedSegmentCount : 0;
+
+  const directAdapters = status?.direct_delivery_adapters && typeof status.direct_delivery_adapters === 'object'
+    ? Object.entries(status.direct_delivery_adapters)
+      .map(([channel, adapter]) => {
+        const label = sanitizeAgentName(channel || '').toLowerCase();
+        const enabled = adapter?.enabled ? 'enabled' : 'disabled';
+        const configured = adapter?.configured ? 'configured' : 'not configured';
+        return label ? `${label} (${enabled}, ${configured})` : '';
+      })
+      .filter(Boolean)
+      .join(', ')
+    : '';
+
+  return [
+    `Session: ${session}`,
+    `Mode: ${mode || 'unknown'}`,
+    `Audience: ${audience}`,
+    `Muted: ${status?.muted ? 'yes' : 'no'}`,
+    `Transcript mirror: ${status?.meetverbose ? 'on' : 'off'}`,
+    copilotName ? `Copilot name: ${copilotName}` : '',
+    `Team agent: ${status?.team_agent ? 'yes' : 'no'}`,
+    `Owner bound: ${status?.owner_bound ? 'yes' : 'no'}`,
+    `Reveal grant: ${reveal}`,
+    `Reaction in flight: ${status?.reaction_in_flight ? 'yes' : 'no'}`,
+    `Queued reaction: ${status?.queued_reaction ? 'yes' : 'no'}`,
+    `Buffered transcript segments: ${bufferedSegments}`,
+    defaultMode ? `Default mode: ${defaultMode}` : '',
+    modes ? `Available modes: ${modes}` : '',
+    directAdapters ? `Direct delivery adapters: ${directAdapters}` : '',
+  ].filter(Boolean).join('\n');
+}
+
 function formatPrivacyStatus(response) {
   const session = sanitizeAgentName(response?.session || 'default');
   const audience = sanitizeAgentName(response?.audience || 'private');
@@ -321,7 +369,7 @@ export default function register(api) {
 
         if (action === 'status') {
           const status = await callBridge(api, '/copilot/status');
-          return { text: `ClawPilot status:\n${JSON.stringify(status, null, 2)}` };
+          return { text: `ClawPilot status:\n${formatStatusResponse(status)}` };
         }
 
         if (action === 'join') {
