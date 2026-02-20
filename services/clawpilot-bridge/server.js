@@ -9,6 +9,8 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { spawn } = require('child_process');
+const meeting = require('./meeting-page.js');
 const app = express();
 const PORT = process.env.PORT || 3001;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -116,6 +118,8 @@ const OPENCLAW_HOOK_DEFAULTS = readOpenClawHookDefaults();
 
 // Webhook secret for verifying incoming requests
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
+const BRIDGE_API_TOKEN = String(process.env.BRIDGE_API_TOKEN || '').trim();
+const BRIDGE_AUTH_ENABLED = BRIDGE_API_TOKEN.length > 0;
 const WEBHOOK_BASE_URL = process.env.WEBHOOK_BASE_URL || `http://127.0.0.1:${PORT}`;
 const RECALL_API_BASE = String(process.env.RECALL_API_BASE || 'https://eu-central-1.recall.ai').replace(/\/+$/, '');
 const RECALL_BOTS_ENDPOINT = `${RECALL_API_BASE}/api/v1/bot`;
@@ -144,9 +148,20 @@ const DISCORD_DIRECT_DELIVERY = parseBooleanLike(process.env.DISCORD_DIRECT_DELI
 const DISCORD_MAX_MESSAGE_CHARS = 2000;
 const DISCORD_DIRECT_MAX_RETRIES = 2;
 const DISCORD_DIRECT_RETRY_BASE_MS = 1000;
+const OPENCLAW_CLI_BIN = String(process.env.OPENCLAW_CLI_BIN || 'openclaw').trim() || 'openclaw';
+const OPENCLAW_COPILOT_CLI_ROUTED = parseBooleanLike(process.env.OPENCLAW_COPILOT_CLI_ROUTED, true);
+const OPENCLAW_AGENT_CLI_TIMEOUT_MS = Number(process.env.OPENCLAW_AGENT_CLI_TIMEOUT_MS || 45000);
+const OPENCLAW_MESSAGE_CLI_TIMEOUT_MS = Number(process.env.OPENCLAW_MESSAGE_CLI_TIMEOUT_MS || 20000);
+const BRIDGE_STATE_FILE_RAW = String(process.env.BRIDGE_STATE_FILE || '.bridge-state.json').trim();
+const BRIDGE_STATE_FILE = path.isAbsolute(BRIDGE_STATE_FILE_RAW)
+  ? BRIDGE_STATE_FILE_RAW
+  : path.join(__dirname, BRIDGE_STATE_FILE_RAW);
 
 if (DISCORD_DIRECT_DELIVERY && !DISCORD_BOT_TOKEN) {
   console.warn('[DiscordDirect] DISCORD_DIRECT_DELIVERY enabled but Discord bot token was not found in openclaw.json. Falling back to OpenClaw hooks.');
+}
+if (OPENCLAW_COPILOT_CLI_ROUTED) {
+  console.log(`[CopilotCLI] enabled cli_bin=${OPENCLAW_CLI_BIN}`);
 }
 
 // Debug mode - mirror raw final transcripts to active OpenClaw chat channel.
@@ -390,6 +405,109 @@ async function postToOpenClawJson(url, payload) {
   return { response, result };
 }
 
+function extractJsonFromCliOutput(stdout) {
+  const raw = String(stdout || '').trim();
+  if (!raw) return null;
+  const lines = raw.split(/\r?\n/);
+  const firstJsonLine = lines.findIndex((line) => line.trim().startsWith('{'));
+  if (firstJsonLine >= 0) {
+    const candidate = lines.slice(firstJsonLine).join('\n').trim();
+    const parsed = safeParseJson(candidate);
+    if (parsed) return parsed;
+  }
+  return safeParseJson(raw);
+}
+
+function runOpenClawCli(args, timeoutMs = 20000) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(OPENCLAW_CLI_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill('SIGKILL');
+      reject(new Error(`openclaw cli timeout after ${timeoutMs}ms`));
+    }, Math.max(1000, timeoutMs));
+
+    child.stdout.on('data', (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code !== 0) {
+        const details = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n').slice(0, 800);
+        reject(new Error(`openclaw cli exited ${code}${details ? `: ${details}` : ''}`));
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+function extractAgentText(cliJson) {
+  const payloads = cliJson?.result?.payloads;
+  if (!Array.isArray(payloads)) return '';
+  for (const payload of payloads) {
+    const text = typeof payload?.text === 'string' ? payload.text.trim() : '';
+    if (text) return text;
+  }
+  return '';
+}
+
+async function generateCopilotTextViaCli(prompt, routeTarget) {
+  const args = ['agent', '--json', '--message', prompt];
+  if (routeTarget?.channel) args.push('--channel', routeTarget.channel);
+  if (routeTarget?.to) args.push('--to', routeTarget.to);
+  const { stdout } = await runOpenClawCli(args, OPENCLAW_AGENT_CLI_TIMEOUT_MS);
+  const parsed = extractJsonFromCliOutput(stdout);
+  const text = extractAgentText(parsed);
+  if (!text) {
+    throw new Error('openclaw agent produced an empty response');
+  }
+  return text;
+}
+
+async function deliverTextViaCli(routeTarget, text) {
+  const args = [
+    'message',
+    'send',
+    '--json',
+    '--channel',
+    routeTarget.channel,
+    '--target',
+    routeTarget.to,
+    '--message',
+    text
+  ];
+  if (routeTarget.accountId) {
+    args.push('--account', routeTarget.accountId);
+  }
+  if (Number.isFinite(routeTarget.messageThreadId)) {
+    args.push('--thread-id', String(routeTarget.messageThreadId));
+  }
+  const { stdout } = await runOpenClawCli(args, OPENCLAW_MESSAGE_CLI_TIMEOUT_MS);
+  const parsed = extractJsonFromCliOutput(stdout);
+  const ok = parsed?.payload?.ok;
+  if (ok === false) {
+    throw new Error(`openclaw message send failed: ${JSON.stringify(parsed?.payload || parsed)}`);
+  }
+  return parsed;
+}
+
 async function sendDebugTranscript(speaker, text, isPartial, options = {}) {
   if (!DEBUG_MODE) return;
 
@@ -419,6 +537,18 @@ async function sendVerboseMirrorToOpenClaw(line, options = {}) {
   const routeText = formatRouteText(routeTarget, 'last');
   let direct = null;
   try {
+    // Avoid hook-path NO_REPLY/suppression for mirrored transcript lines.
+    if (OPENCLAW_COPILOT_CLI_ROUTED && routeTarget?.channel && routeTarget?.to) {
+      try {
+        await deliverTextViaCli(routeTarget, line);
+        const elapsed = Date.now() - sendStart;
+        console.log(`[VerboseMirror] ${elapsed}ms - delivered_cli route=${routeText}`);
+        return { ok: true };
+      } catch (cliError) {
+        console.warn(`[VerboseMirror] cli path failed route=${routeText} error=${cliError.message} fallback=openclaw`);
+      }
+    }
+
     direct = await tryDirectDelivery(routeTarget, line);
     if (direct.delivered) {
       const directResult = direct.result;
@@ -514,6 +644,7 @@ const lastCanvasLineBySession = new Map(); // session id -> last line to dedupe
 const botSessionLookupInFlight = new Map(); // bot_id -> Promise<string|null>
 let activeMeetingSessionId = 'default';
 let activeRouteTarget = null;
+let bridgeStatePersistPending = false;
 
 function normalizeRouteChannel(value) {
   if (typeof value !== 'string') return null;
@@ -530,8 +661,98 @@ function normalizeRouteTarget(raw) {
   const to = candidates
     .map((value) => (typeof value === 'string' ? value.trim() : ''))
     .find((value) => Boolean(value));
+  const accountId = typeof raw.accountId === 'string' ? raw.accountId.trim() : '';
+  const threadValue = raw.messageThreadId;
+  const messageThreadId =
+    typeof threadValue === 'number' && Number.isFinite(threadValue)
+      ? Math.round(threadValue)
+      : (typeof threadValue === 'string' && /^\d+$/.test(threadValue.trim())
+          ? Number(threadValue.trim())
+          : null);
   if (!channel || !to) return null;
-  return { channel, to };
+  const normalized = { channel, to };
+  if (accountId) normalized.accountId = accountId;
+  if (Number.isFinite(messageThreadId)) normalized.messageThreadId = messageThreadId;
+  return normalized;
+}
+
+function persistBridgeState(reason = 'update') {
+  if (!BRIDGE_STATE_FILE) return;
+  if (bridgeStatePersistPending) return;
+  bridgeStatePersistPending = true;
+  setTimeout(() => {
+    bridgeStatePersistPending = false;
+    const payload = {
+      updated_at: new Date().toISOString(),
+      reason,
+      active_meeting_session_id: activeMeetingSessionId,
+      active_route_target: activeRouteTarget,
+      meeting_sessions: Array.from(meetingSessionByBotId.entries()).map(([botId, sessionId]) => ({
+        bot_id: botId,
+        meeting_session: sessionId
+      })),
+      route_targets: Array.from(routeTargetByBotId.entries()).map(([botId, routeTarget]) => ({
+        bot_id: botId,
+        route_target: routeTarget
+      }))
+    };
+    try {
+      fs.writeFileSync(BRIDGE_STATE_FILE, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+    } catch (error) {
+      console.warn(`[BridgeState] persist failed file=${BRIDGE_STATE_FILE} error=${error.message}`);
+    }
+  }, 10);
+}
+
+function loadBridgeState() {
+  if (!BRIDGE_STATE_FILE) return;
+  if (!fs.existsSync(BRIDGE_STATE_FILE)) return;
+  try {
+    const raw = fs.readFileSync(BRIDGE_STATE_FILE, 'utf8');
+    const parsed = safeParseJson(raw);
+    if (!parsed || typeof parsed !== 'object') {
+      return;
+    }
+
+    meetingSessionByBotId.clear();
+    routeTargetByBotId.clear();
+
+    const meetingEntries = Array.isArray(parsed.meeting_sessions) ? parsed.meeting_sessions : [];
+    for (const entry of meetingEntries) {
+      const botId = typeof entry?.bot_id === 'string' ? entry.bot_id.trim() : '';
+      const sessionId = normalizeMeetingSessionId(entry?.meeting_session);
+      if (!botId || !sessionId) continue;
+      meetingSessionByBotId.set(botId, sessionId);
+    }
+
+    const routeEntries = Array.isArray(parsed.route_targets) ? parsed.route_targets : [];
+    for (const entry of routeEntries) {
+      const botId = typeof entry?.bot_id === 'string' ? entry.bot_id.trim() : '';
+      const routeTarget = normalizeRouteTarget(entry?.route_target);
+      if (!botId || !routeTarget) continue;
+      routeTargetByBotId.set(botId, routeTarget);
+    }
+
+    const explicitRouteTarget = normalizeRouteTarget(parsed.active_route_target);
+    if (explicitRouteTarget) {
+      activeRouteTarget = explicitRouteTarget;
+    } else {
+      activeRouteTarget = Array.from(routeTargetByBotId.values()).at(-1) || null;
+    }
+
+    const explicitSessionId = normalizeMeetingSessionId(parsed.active_meeting_session_id || '');
+    if (explicitSessionId !== 'default') {
+      activeMeetingSessionId = explicitSessionId;
+    } else {
+      activeMeetingSessionId = Array.from(meetingSessionByBotId.values()).at(-1) || 'default';
+    }
+
+    console.log(
+      `[BridgeState] loaded file=${BRIDGE_STATE_FILE} sessions=${meetingSessionByBotId.size} routes=${routeTargetByBotId.size}`
+    );
+  } catch (error) {
+    console.warn(`[BridgeState] load failed file=${BRIDGE_STATE_FILE} error=${error.message}`);
+  }
 }
 
 function rememberBotRouteTarget(botId, routeTarget) {
@@ -540,6 +761,7 @@ function rememberBotRouteTarget(botId, routeTarget) {
   if (!normalized) return;
   routeTargetByBotId.set(botId, normalized);
   activeRouteTarget = normalized;
+  persistBridgeState('remember_route_target');
 }
 
 function resolveRouteTarget(routeTarget, botId = null) {
@@ -617,6 +839,98 @@ function hasHighValueCue(text) {
 
 app.use(express.json());
 
+function getBearerTokenFromHeader(rawHeader) {
+  if (!rawHeader || typeof rawHeader !== 'string') return '';
+  const [scheme, token] = rawHeader.trim().split(/\s+/, 2);
+  if (!scheme || !token) return '';
+  if (scheme.toLowerCase() !== 'bearer') return '';
+  return token.trim();
+}
+
+function safeTokenEquals(left, right) {
+  if (!left || !right) return false;
+  const leftBuf = Buffer.from(String(left));
+  const rightBuf = Buffer.from(String(right));
+  if (leftBuf.length !== rightBuf.length) return false;
+  return crypto.timingSafeEqual(leftBuf, rightBuf);
+}
+
+function requireBridgeAuth(req, res, next) {
+  if (!BRIDGE_AUTH_ENABLED) return next();
+  const headerValue = req.get('authorization') || '';
+  const token = getBearerTokenFromHeader(headerValue);
+  if (!safeTokenEquals(token, BRIDGE_API_TOKEN)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  return next();
+}
+
+function sanitizeMeetingUrlValue(value) {
+  if (value && typeof value === 'object') {
+    const platform = typeof value.platform === 'string' ? value.platform.trim() : '';
+    const meetingId = typeof value.meeting_id === 'string' ? value.meeting_id.trim() : '';
+    const out = {};
+    if (platform) out.platform = platform;
+    if (meetingId) out.meeting_id = meetingId;
+    if (Object.keys(out).length > 0) return out;
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    return extractMeetingTarget(value) || null;
+  }
+
+  return null;
+}
+
+function firstNonEmptyString(...candidates) {
+  for (const value of candidates) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+  return '';
+}
+
+function buildSafeLaunchResponse(raw = {}, fallback = {}) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const base = fallback && typeof fallback === 'object' ? fallback : {};
+  const safe = {};
+
+  const id = firstNonEmptyString(source.id, base.id);
+  if (id) safe.id = id;
+
+  const status = firstNonEmptyString(source.status, base.status);
+  if (status) safe.status = status;
+
+  const botName = firstNonEmptyString(source.bot_name, base.bot_name);
+  if (botName) safe.bot_name = botName;
+
+  const meetingUrl = sanitizeMeetingUrlValue(source.meeting_url ?? base.meeting_url);
+  if (meetingUrl) safe.meeting_url = meetingUrl;
+
+  const joinAt = firstNonEmptyString(source.join_at, base.join_at);
+  if (joinAt) safe.join_at = joinAt;
+
+  const meetingSession = firstNonEmptyString(source.meeting_session, base.meeting_session);
+  if (meetingSession) safe.meeting_session = meetingSession;
+
+  const routeTarget = normalizeRouteTarget(source.routing_target) || normalizeRouteTarget(base.routing_target);
+  if (routeTarget || Object.prototype.hasOwnProperty.call(source, 'routing_target') || Object.prototype.hasOwnProperty.call(base, 'routing_target')) {
+    safe.routing_target = routeTarget || null;
+  }
+
+  const replacedFrom = firstNonEmptyString(source.replaced_from_bot_id, base.replaced_from_bot_id);
+  if (replacedFrom) safe.replaced_from_bot_id = replacedFrom;
+
+  const error = firstNonEmptyString(source.error, base.error);
+  if (error) safe.error = error;
+
+  const code = firstNonEmptyString(source.code, base.code);
+  if (code) safe.code = code;
+
+  return safe;
+}
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({
@@ -646,12 +960,12 @@ app.get('/health', (req, res) => {
 });
 
 // Mute/unmute endpoints
-app.post('/mute', (req, res) => {
+app.post('/mute', requireBridgeAuth, (req, res) => {
   const state = setMuteState(true, 'http:/mute');
   res.json({ ...state, message: 'Transcript processing paused' });
 });
 
-app.post('/unmute', (req, res) => {
+app.post('/unmute', requireBridgeAuth, (req, res) => {
   const state = setMuteState(false, 'http:/unmute');
   res.json({ ...state, message: 'Transcript processing resumed' });
 });
@@ -660,7 +974,7 @@ app.get('/mute-status', (req, res) => {
   res.json({ muted: IS_MUTED });
 });
 
-app.get('/copilot/status', (req, res) => {
+app.get('/copilot/status', requireBridgeAuth, (req, res) => {
   res.json({
     muted: IS_MUTED,
     meetverbose: DEBUG_MODE,
@@ -723,6 +1037,8 @@ function normalizeMeetingSessionId(value) {
   return raw ? raw.replace(/[^a-zA-Z0-9_.:-]/g, '_').slice(0, 120) || 'default' : 'default';
 }
 
+loadBridgeState();
+
 function extractSessionFromMeetingValue(value) {
   if (!value) {
     return null;
@@ -771,6 +1087,7 @@ function rememberBotSession(botId, sessionId) {
   const normalized = normalizeMeetingSessionId(sessionId);
   meetingSessionByBotId.set(botId, normalized);
   activeMeetingSessionId = normalized;
+  persistBridgeState('remember_session');
 }
 
 function forgetBotSession(botId) {
@@ -785,6 +1102,7 @@ function forgetBotSession(botId) {
     activeRouteTarget = Array.from(routeTargetByBotId.values()).at(-1) || null;
   }
   if (!removed) {
+    persistBridgeState('forget_session_noop');
     return;
   }
   if (meetingSessionByBotId.size === 0) {
@@ -792,6 +1110,7 @@ function forgetBotSession(botId) {
   } else {
     activeMeetingSessionId = Array.from(meetingSessionByBotId.values()).at(-1) || 'default';
   }
+  persistBridgeState('forget_session');
 }
 
 async function hydrateBotSessionFromApi(botId) {
@@ -970,7 +1289,7 @@ async function waitForBotTerminal(botId, timeoutMs = BOT_REPLACE_WAIT_TIMEOUT_MS
 }
 
 // Proxy endpoint to launch bots (avoids CORS)
-app.post('/launch', async (req, res) => {
+app.post('/launch', requireBridgeAuth, async (req, res) => {
   const { meeting_url, language, provider, replace_active, bot_name, agent_name, route_target } = req.body;
   
   if (!meeting_url) {
@@ -988,31 +1307,37 @@ app.post('/launch', async (req, res) => {
   let replacedFromBotId = null;
   if (existingBot) {
     if (!shouldReplaceActive) {
-      return res.status(409).json({
+      return res.status(409).json(buildSafeLaunchResponse({
         id: existingBot.id,
         status: 'already_active',
-        meeting_url,
-        existing_bot: existingBot,
+        meeting_url: existingBot.meeting_url,
+        meeting_session: normalizeMeetingSessionId(launchSessionId),
         routing_target: effectiveRouteTarget || null
-      });
+      }));
     }
     const removal = await removeBotFromCall(existingBot.id);
     if (!removal.ok) {
-      return res.status(502).json({
+      return res.status(502).json(buildSafeLaunchResponse({
+        id: existingBot.id,
         status: 'replace_failed',
         meeting_url,
-        existing_bot: existingBot,
-        remove_error: removal
-      });
+        meeting_session: normalizeMeetingSessionId(launchSessionId),
+        routing_target: effectiveRouteTarget || null,
+        error: 'Failed to replace active bot',
+        code: removal.code || 'replace_failed'
+      }));
     }
     const waitResult = await waitForBotTerminal(existingBot.id);
     if (!waitResult.ok) {
-      return res.status(409).json({
+      return res.status(409).json(buildSafeLaunchResponse({
+        id: existingBot.id,
         status: 'replace_timeout',
         meeting_url,
-        existing_bot: existingBot,
-        wait_result: waitResult
-      });
+        meeting_session: normalizeMeetingSessionId(launchSessionId),
+        routing_target: effectiveRouteTarget || null,
+        error: 'Timed out waiting for active bot replacement',
+        code: waitResult.code || 'replace_timeout'
+      }));
     }
     replacedFromBotId = existingBot.id;
     forgetBotSession(existingBot.id);
@@ -1073,26 +1398,49 @@ app.post('/launch', async (req, res) => {
     });
 
     const data = await response.text();
+    const launchFallback = {
+      status: response.ok ? 'launch_requested' : 'launch_failed',
+      meeting_url,
+      meeting_session: normalizeMeetingSessionId(launchSessionId),
+      routing_target: effectiveRouteTarget || null
+    };
     try {
       const json = JSON.parse(data);
       if (replacedFromBotId) {
-        json.replaced_from_bot_id = replacedFromBotId;
+        launchFallback.replaced_from_bot_id = replacedFromBotId;
       }
       if (response.status >= 200 && response.status < 300 && json?.id) {
         rememberBotSession(json.id, launchSessionId);
         if (effectiveRouteTarget) {
           rememberBotRouteTarget(json.id, effectiveRouteTarget);
         }
-        json.meeting_session = normalizeMeetingSessionId(launchSessionId);
-        json.routing_target = effectiveRouteTarget || null;
+        launchFallback.id = json.id;
       }
-      return res.status(response.status).json(json);
+      return res.status(response.status).json(buildSafeLaunchResponse(json, launchFallback));
     } catch (e) {
-      return res.status(response.status).send(data);
+      return res.status(response.status).json(buildSafeLaunchResponse(
+        {
+          error: 'Recall launch API returned a non-JSON response',
+          code: `http_${response.status}`
+        },
+        launchFallback
+      ));
     }
   } catch (err) {
     console.error('Launch error:', err);
-    res.status(500).json({ error: err.message });
+    return res.status(500).json(buildSafeLaunchResponse(
+      {
+        error: 'Launch request failed',
+        code: 'launch_request_failed'
+      },
+      {
+        status: 'launch_failed',
+        meeting_url,
+        meeting_session: normalizeMeetingSessionId(launchSessionId),
+        routing_target: effectiveRouteTarget || null,
+        replaced_from_bot_id: replacedFromBotId || ''
+      }
+    ));
   }
 });
 
@@ -1529,19 +1877,35 @@ async function sendToOpenClaw(message, options = {}) {
   const text = `[MEETING TRANSCRIPT]\n${message}`;
   let direct = null;
   try {
-    direct = await tryDirectDelivery(routeTarget, text);
-    if (direct.delivered) {
-      const directResult = direct.result;
-      const elapsed = Date.now() - sendStart;
-      console.log(
-        `[FastInject] ${elapsed}ms - delivered_direct route=${routeText} chunks=${directResult.chunksSent}/${directResult.chunksTotal}`
-      );
-      return elapsed;
+    // Routed delivery via OpenClaw hooks may resolve to NO_REPLY. Use the CLI pipeline first so
+    // we can get model output synchronously and send it directly to the target channel.
+    if (OPENCLAW_COPILOT_CLI_ROUTED && routeTarget?.channel && routeTarget?.to) {
+      try {
+        const copilotText = await generateCopilotTextViaCli(text, routeTarget);
+        await deliverTextViaCli(routeTarget, copilotText);
+        const elapsed = Date.now() - sendStart;
+        console.log(`[FastInject] ${elapsed}ms - delivered_cli route=${routeText}`);
+        return elapsed;
+      } catch (cliError) {
+        console.warn(`[FastInject] cli path failed route=${routeText} error=${cliError.message} fallback=openclaw`);
+      }
     }
-    if (direct.reason === 'failed') {
-      console.warn(
-        `[FastInject] direct failed route=${routeText} error=${direct.result?.error || 'unknown'} fallback=openclaw`
-      );
+
+    if (!routeTarget?.channel || !routeTarget?.to) {
+      direct = await tryDirectDelivery(routeTarget, text);
+      if (direct.delivered) {
+        const directResult = direct.result;
+        const elapsed = Date.now() - sendStart;
+        console.log(
+          `[FastInject] ${elapsed}ms - delivered_direct route=${routeText} chunks=${directResult.chunksSent}/${directResult.chunksTotal}`
+        );
+        return elapsed;
+      }
+      if (direct.reason === 'failed') {
+        console.warn(
+          `[FastInject] direct failed route=${routeText} error=${direct.result?.error || 'unknown'} fallback=openclaw`
+        );
+      }
     }
 
     if (!OPENCLAW_HOOK_TOKEN) {
@@ -1578,12 +1942,12 @@ async function sendToOpenClaw(message, options = {}) {
 }
 
 // Meeting verbose mode toggle endpoints
-app.post('/meetverbose/on', (req, res) => {
+app.post('/meetverbose/on', requireBridgeAuth, (req, res) => {
   const state = setMeetVerboseState(true, 'http:/meetverbose/on');
   res.json({ ...state, message: 'Raw transcript mirror ON (active chat channel)' });
 });
 
-app.post('/meetverbose/off', (req, res) => {
+app.post('/meetverbose/off', requireBridgeAuth, (req, res) => {
   const state = setMeetVerboseState(false, 'http:/meetverbose/off');
   res.json({ ...state, message: 'Raw transcript mirror OFF - smart feedback only' });
 });
@@ -1619,7 +1983,6 @@ app.post('/meetverbose', (req, res) => {
 });
 
 // ============ MEETING CANVAS ============
-const meeting = require('./meeting-page.js');
 const MEETING_MAX_TITLE_LEN = Number(process.env.MEETING_MAX_TITLE_LEN || 180);
 const MEETING_MAX_CONTENT_LEN = Number(process.env.MEETING_MAX_CONTENT_LEN || 2000);
 
@@ -1644,7 +2007,7 @@ function readMeetingContent(req) {
 }
 
 // Serve the meeting page
-app.get('/meeting', (req, res) => {
+app.get('/meeting', requireBridgeAuth, (req, res) => {
   if (!req.query?.session && activeMeetingSessionId && activeMeetingSessionId !== 'default') {
     return res.redirect(302, `/meeting?session=${encodeURIComponent(activeMeetingSessionId)}`);
   }
@@ -1653,7 +2016,7 @@ app.get('/meeting', (req, res) => {
 });
 
 // SSE stream for real-time updates
-app.get('/meeting/stream', (req, res) => {
+app.get('/meeting/stream', requireBridgeAuth, (req, res) => {
   const sessionId = getMeetingSessionId(req);
   const lastEventId = req.get('Last-Event-ID') || req.query?.lastEventId || 0;
   res.setHeader('Content-Type', 'text/event-stream');
@@ -1735,7 +2098,7 @@ app.post('/meeting/clear', (req, res) => {
 });
 
 // Get current state
-app.get('/meeting/state', (req, res) => {
+app.get('/meeting/state', requireBridgeAuth, (req, res) => {
   const sessionId = getMeetingSessionId(req);
   res.json(meeting.getPublicState(sessionId));
 });
@@ -1748,6 +2111,7 @@ app.listen(PORT, HOST, () => {
   console.log(`Webhook URL: ${WEBHOOK_BASE_URL.replace(/\/$/, '')}/webhook`);
   console.log(`Health check: http://localhost:${PORT}/health`);
   console.log(`[OpenClawHook] wake=${OPENCLAW_HOOK_URL} agent=${OPENCLAW_AGENT_HOOK_URL}`);
+  console.log(`[BridgeAuth] ${BRIDGE_AUTH_ENABLED ? 'enabled' : 'disabled'}${BRIDGE_AUTH_ENABLED ? '' : ' (set BRIDGE_API_TOKEN to enforce bearer auth on bridge control routes)'}`);
   console.log(`[OpenClawHook] token=${OPENCLAW_HOOK_TOKEN ? 'set' : 'missing'} url_source=${OPENCLAW_HOOK_URL_SOURCE} token_source=${OPENCLAW_HOOK_TOKEN_SOURCE}`);
   if (!OPENCLAW_HOOK_TOKEN) {
     console.warn(`[OpenClawHook] token missing. Configure hooks.token in ${OPENCLAW_HOOK_DEFAULTS.configPath}`);

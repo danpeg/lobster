@@ -38,18 +38,23 @@ Required environment variables:
 2. `RECALL_API_BASE` (match your Recall workspace region)
 3. `WEBHOOK_SECRET`
 4. `WEBHOOK_BASE_URL`
+5. `BRIDGE_API_TOKEN` (strongly recommended; bearer token for bridge control routes)
 
 OpenClaw integration values are loaded from `openclaw.json`:
 
-5. `hooks.*` (for `/hooks/wake` + token)
-6. `channels.discord.botToken` (for direct Discord delivery)
-7. If bridge runs as a different OS user, set `OPENCLAW_CONFIG_PATH` to the correct `openclaw.json`
+6. `hooks.*` (for `/hooks/wake` + token)
+7. `channels.discord.botToken` (for direct Discord delivery)
+8. If bridge runs as a different OS user, set `OPENCLAW_CONFIG_PATH` to the correct `openclaw.json`
 
 Optional bridge behavior:
 
-8. `DISCORD_DIRECT_DELIVERY` (default: `true`)
+9. `DISCORD_DIRECT_DELIVERY` (default: `true`)
 
 Routing is channel-agnostic by default (via OpenClaw hooks). Discord direct delivery is an optional reliability adapter with fallback to OpenClaw hooks.
+
+Plugin auth alignment:
+
+- Configure plugin `bridgeToken` to exactly match `BRIDGE_API_TOKEN` once bridge auth is enabled.
 
 ## Verify End-to-End
 
@@ -90,6 +95,7 @@ Toggle transcript mirroring in active chat:
 1. The plugin does not read environment variables at runtime.
 2. The plugin only calls your configured bridge endpoint for explicit `/clawpilot` commands.
 3. Non-private bridge hosts are blocked by default unless `allowRemoteBridge` is explicitly enabled.
+4. `/launch` responses are sanitized and do not return webhook URLs or tokens.
 
 ## Branches
 

@@ -29,6 +29,28 @@ npm start
 - `WEBHOOK_SECRET`
 - `WEBHOOK_BASE_URL`
 
+## Bridge API Auth (Recommended)
+
+- Set `BRIDGE_API_TOKEN` to enforce bearer auth on bridge control/data routes.
+- Send `Authorization: Bearer <BRIDGE_API_TOKEN>` from trusted callers (for example the ClawPilot plugin using `bridgeToken`).
+- `/health` and `/webhook` remain unauthenticated for liveness/Recall delivery.
+
+Protected routes when `BRIDGE_API_TOKEN` is set:
+
+- `POST /launch`
+- `GET /copilot/status`
+- `POST /mute`
+- `POST /unmute`
+- `POST /meetverbose/on`
+- `POST /meetverbose/off`
+- `GET /meeting`
+- `GET /meeting/state`
+- `GET /meeting/stream`
+
+Migration note:
+
+- If `/clawpilot` commands start returning `401`, set plugin config `bridgeToken` to match `BRIDGE_API_TOKEN`.
+
 ## OpenClaw Configuration Source
 
 - Hook URL/token are read from `openclaw.json` (`hooks.path`, `hooks.token`, `gateway.port`)
@@ -47,6 +69,19 @@ npm start
 - Routing is channel-agnostic by default: all channels deliver via OpenClaw hooks
 - `DISCORD_DIRECT_DELIVERY` controls direct-first mode (default: `true`)
 - Discord direct delivery is an adapter; if it fails, bridge falls back to OpenClaw hook delivery
+
+## Routed Copilot Delivery (All Channels)
+
+- `OPENCLAW_COPILOT_CLI_ROUTED=true` (default) enables a routed copilot path that:
+  - generates the suggestion via `openclaw agent --json`
+  - delivers the final text via `openclaw message send --json`
+- This avoids hook-path `NO_REPLY` suppression on routed channels.
+- Tune with:
+  - `OPENCLAW_CLI_BIN` (default: `openclaw`)
+  - `OPENCLAW_AGENT_CLI_TIMEOUT_MS` (default: `45000`)
+  - `OPENCLAW_MESSAGE_CLI_TIMEOUT_MS` (default: `20000`)
+- Route/session mappings are persisted across bridge restarts so active meetings keep chat routing:
+  - `BRIDGE_STATE_FILE` (default: `.bridge-state.json` in the bridge directory)
 
 ## Reaction Style Defaults
 

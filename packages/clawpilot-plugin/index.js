@@ -194,6 +194,21 @@ function buildRouteTarget(ctx) {
   return target;
 }
 
+function summarizeRouteContext(ctx) {
+  return {
+    channel: sanitizeAgentName(ctx?.channel),
+    channelId: sanitizeAgentName(ctx?.channelId),
+    to: sanitizeAgentName(ctx?.to),
+    from: sanitizeAgentName(ctx?.from),
+    senderId: sanitizeAgentName(ctx?.senderId),
+    accountId: sanitizeAgentName(ctx?.accountId),
+    messageThreadId:
+      typeof ctx?.messageThreadId === 'number' && Number.isFinite(ctx.messageThreadId)
+        ? ctx.messageThreadId
+        : null,
+  };
+}
+
 async function callBridge(api, path, options = 'GET') {
   let method = 'GET';
   let body;
@@ -263,6 +278,11 @@ export default function register(api) {
 
           const payload = { meeting_url: parsed.meetingUrl };
           const routeTarget = buildRouteTarget(ctx);
+          if (routeTarget) {
+            console.log(`[ClawPilot] route_target resolved ${JSON.stringify(routeTarget)}`);
+          } else {
+            console.warn(`[ClawPilot] route_target missing ctx=${JSON.stringify(summarizeRouteContext(ctx))}`);
+          }
           if (routeTarget) payload.route_target = routeTarget;
           if (parsed.botName) payload.bot_name = parsed.botName;
           if (!parsed.botName) {
