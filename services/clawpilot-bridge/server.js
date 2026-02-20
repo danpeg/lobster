@@ -979,6 +979,74 @@ async function announceMeetingState(botId, sessionId) {
   await sendVerboseMirrorToOpenClaw(message, { botId });
 }
 
+function escapeRegex(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function extractAudienceIntent(text) {
+  const normalized = normalizeControlText(text);
+  if (!normalized) return null;
+
+  const hasAudienceCue = /\b(audience|privacy|visibility)\b/.test(normalized);
+  const hasChangeCue = /\b(set|switch|change|make|move|use|keep|update|stay)\b/.test(normalized);
+  if (!hasAudienceCue && !hasChangeCue) return null;
+
+  const wantsPrivate = /\b(private|personal|owner only|owner-only)\b/.test(normalized);
+  const wantsShared = /\b(shared|public|team)\b/.test(normalized);
+  if (wantsPrivate && wantsShared) return null;
+  if (wantsPrivate) return 'private';
+  if (wantsShared) return 'shared';
+  return null;
+}
+
+function extractModeIntent(text, availableModes = getAvailableModes()) {
+  const normalized = normalizeControlText(text);
+  const modes = Array.from(
+    new Set(
+      (Array.isArray(availableModes) ? availableModes : [])
+        .map((value) => normalizeMode(value))
+        .filter(Boolean)
+    )
+  );
+  if (!normalized || modes.length === 0) {
+    return { mode: null, invalidMode: '' };
+  }
+
+  const explicitMatch = normalized.match(/\bmode\b\s*(?:is|to|as)?\s*([a-z0-9_-]+)/);
+  if (explicitMatch?.[1]) {
+    const candidate = normalizeMode(explicitMatch[1]);
+    if (modes.includes(candidate)) {
+      return { mode: candidate, invalidMode: '' };
+    }
+    return { mode: null, invalidMode: candidate };
+  }
+
+  const mentioned = modes.filter((mode) => {
+    const pattern = new RegExp(`\\b${escapeRegex(mode)}\\b`, 'i');
+    return pattern.test(normalized);
+  });
+  if (mentioned.length !== 1) {
+    return { mode: null, invalidMode: '' };
+  }
+
+  const hasModeCue = /\bmode\b/.test(normalized);
+  const hasChangeCue = /\b(set|switch|change|use|run|move|go|try|enter|let s|lets)\b/.test(normalized);
+  if (!hasModeCue && !hasChangeCue) {
+    return { mode: null, invalidMode: '' };
+  }
+  return { mode: mentioned[0], invalidMode: '' };
+}
+
+function extractStartupIntent(text, availableModes = getAvailableModes()) {
+  const audience = extractAudienceIntent(text);
+  const modeIntent = extractModeIntent(text, availableModes);
+  return {
+    audience,
+    mode: modeIntent.mode,
+    invalidMode: modeIntent.invalidMode
+  };
+}
+
 function persistBridgeState(reason = 'update') {
   if (!BRIDGE_STATE_FILE) return;
   if (bridgeStatePersistPending) return;
@@ -1471,6 +1539,107 @@ app.post('/copilot/audience', requireBridgeAuth, (req, res) => {
   }
   setSessionAudience(session, requestedAudience, 'http:/copilot/audience');
   res.json(buildPrivacyResponse(session));
+});
+
+app.post('/copilot/startup-input', requireBridgeAuth, async (req, res) => {
+  const session = ensureSessionDefaults(getMeetingSessionId(req));
+  const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+  const routeTarget = normalizeRouteTarget(req.body?.route_target);
+  const requester = normalizeOwnerBinding(req.body?.owner_binding);
+  const availableModes = getAvailableModes();
+  const current = {
+    audience: getSessionAudience(session),
+    mode: getSessionMode(session)
+  };
+
+  if (!text) {
+    return res.status(400).json({ error: 'text required', session, current });
+  }
+
+  const intent = extractStartupIntent(text, availableModes);
+  const hasIntent = Boolean(intent.audience || intent.mode);
+  if (!hasIntent) {
+    const message = intent.invalidMode
+      ? `Mode "${intent.invalidMode}" is not available.`
+      : 'No audience/mode preference detected.';
+    return res.json({
+      session,
+      matched: false,
+      authorized: true,
+      updates: {},
+      current,
+      message,
+      ...(intent.invalidMode
+        ? { invalid_mode: intent.invalidMode, available_modes: availableModes }
+        : {})
+    });
+  }
+
+  const expectedOwner = getSessionOwnerBinding(session);
+  if (!expectedOwner) {
+    return res.json({
+      session,
+      matched: true,
+      authorized: false,
+      updates: {},
+      current,
+      message: 'Owner authorization required: no owner binding set for this session.'
+    });
+  }
+  if (!ownerBindingMatches(expectedOwner, requester)) {
+    return res.json({
+      session,
+      matched: true,
+      authorized: false,
+      updates: {},
+      current,
+      message: 'Owner authorization required for text setup updates.'
+    });
+  }
+
+  const updates = {};
+  if (intent.audience) {
+    setSessionAudience(session, intent.audience, 'http:/copilot/startup-input');
+    updates.audience = intent.audience;
+  }
+  if (intent.mode) {
+    setSessionMode(session, intent.mode, 'http:/copilot/startup-input');
+    updates.mode = intent.mode;
+  }
+  const next = {
+    audience: getSessionAudience(session),
+    mode: getSessionMode(session)
+  };
+
+  const changeSummary = [];
+  if (updates.audience) changeSummary.push(`audience=${updates.audience}`);
+  if (updates.mode) changeSummary.push(`mode=${updates.mode}`);
+  let message = changeSummary.length
+    ? `Updated ${changeSummary.join(', ')}.`
+    : 'No changes applied.';
+
+  if (routeTarget && changeSummary.length) {
+    await sendVerboseMirrorToOpenClaw(`[MEETING CONTROL] ${message}`, {
+      routeTarget,
+      sessionId: session
+    });
+  }
+
+  if (intent.invalidMode && !updates.mode) {
+    message = `${message} Mode "${intent.invalidMode}" is not available.`;
+  }
+
+  return res.json({
+    session,
+    matched: true,
+    authorized: true,
+    updates,
+    current: next,
+    message,
+    ...(intent.invalidMode && !updates.mode
+      ? { invalid_mode: intent.invalidMode, available_modes: availableModes }
+      : {})
+  });
 });
 
 app.post('/copilot/reveal', requireBridgeAuth, (req, res) => {

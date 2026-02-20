@@ -125,9 +125,11 @@ function buildHelpText() {
     '/clawpilot mode',
     '/clawpilot mode <balanced|brainstorm|weekly|standup|sales|catchup>',
     '  Show or set meeting copilot mode.',
+    '  Plain text also works in meetings: "mode brainstorm".',
     '',
     '/clawpilot audience <private|shared>',
     '  Set privacy audience policy for the active meeting.',
+    '  Plain text also works in meetings: "audience shared".',
     '',
     '/clawpilot privacy',
     '  Show privacy state, owner binding, and reveal status.',
@@ -226,6 +228,12 @@ function summarizeRouteContext(ctx) {
   };
 }
 
+function parseThreadId(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) return Number(value.trim());
+  return null;
+}
+
 function buildOwnerBinding(ctx) {
   const channel = sanitizeAgentName(ctx?.channelId || ctx?.channel).toLowerCase();
   const to = sanitizeAgentName(ctx?.to || ctx?.from);
@@ -239,6 +247,45 @@ function buildOwnerBinding(ctx) {
   const senderId = sanitizeAgentName(ctx?.senderId || ctx?.from);
   if (senderId) ownerBinding.senderId = senderId;
   return ownerBinding;
+}
+
+function buildRouteTargetFromHook(event, ctx) {
+  const metadata = event?.metadata || {};
+  const channel = sanitizeAgentName(
+    ctx?.channelId || metadata.originatingChannel || metadata.surface || metadata.provider,
+  ).toLowerCase();
+  const to = sanitizeAgentName(ctx?.conversationId || metadata.originatingTo || metadata.to || event?.from);
+  if (!channel || !to) return null;
+
+  const target = { channel, to };
+  const accountId = sanitizeAgentName(ctx?.accountId);
+  if (accountId) target.accountId = accountId;
+  const threadId = parseThreadId(metadata.threadId);
+  if (Number.isFinite(threadId)) target.messageThreadId = threadId;
+  return target;
+}
+
+function buildOwnerBindingFromHook(event, ctx, routeTarget) {
+  const metadata = event?.metadata || {};
+  const channel = routeTarget?.channel || sanitizeAgentName(ctx?.channelId).toLowerCase();
+  const to = routeTarget?.to || sanitizeAgentName(ctx?.conversationId || metadata.originatingTo || metadata.to);
+  if (!channel || !to) return null;
+
+  const ownerBinding = { channel, to };
+  const accountId = routeTarget?.accountId || sanitizeAgentName(ctx?.accountId);
+  if (accountId) ownerBinding.accountId = accountId;
+  const senderId = sanitizeAgentName(metadata.senderId || event?.from);
+  if (senderId) ownerBinding.senderId = senderId;
+  return ownerBinding;
+}
+
+function looksLikeStartupPreferenceText(text) {
+  const normalized = String(text || '').trim().toLowerCase();
+  if (!normalized) return false;
+  const audienceSignal = /\b(audience|privacy|visibility|private|shared|public|owner-only|owner only)\b/.test(normalized);
+  const modeMention = /\b(mode|balanced|brainstorm|weekly|standup|sales|catchup)\b/.test(normalized);
+  const changeCue = /\b(set|switch|change|use|move|go|try|update|let's|lets)\b/.test(normalized);
+  return audienceSignal || (modeMention && (changeCue || /\bmode\b/.test(normalized)));
 }
 
 function formatModeStatus(response) {
@@ -352,6 +399,23 @@ async function callBridge(api, path, options = 'GET') {
 }
 
 export default function register(api) {
+  api.on('message_received', async (event, ctx) => {
+    try {
+      const text = String(event?.content || '').trim();
+      if (!text || text.startsWith('/')) return;
+      if (!looksLikeStartupPreferenceText(text)) return;
+
+      const routeTarget = buildRouteTargetFromHook(event, ctx);
+      const ownerBinding = buildOwnerBindingFromHook(event, ctx, routeTarget);
+      const body = { text };
+      if (routeTarget) body.route_target = routeTarget;
+      if (ownerBinding) body.owner_binding = ownerBinding;
+      await callBridge(api, '/copilot/startup-input', { method: 'POST', body });
+    } catch (err) {
+      api.logger.warn(`[ClawPilot] startup-input forward failed: ${err.message}`);
+    }
+  });
+
   api.registerCommand({
     name: 'clawpilot',
     description: 'Control ClawPilot: help | status | join | pause | resume | transcript | mode | audience | privacy | reveal',

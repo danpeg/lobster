@@ -1,0 +1,2 @@
+defect_id,severity,status,case_id,channel,summary,steps_to_reproduce,expected,actual,workaround,owner,target_fix_date,artifact_ref
+DEF-001,P1,OPEN,B-06,discord,Join command fails on valid Meet URL,"1) Send /clawpilot join <valid_url> 2) Observe reply",Join summary returned,Bridge 500 returned,,owner-name,2026-02-22,logs/def-001.txt

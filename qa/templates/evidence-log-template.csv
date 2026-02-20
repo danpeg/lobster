@@ -1,0 +1,2 @@
+run_id,date_time_utc,channel,chat_type,case_id,result,defect_id,notes,artifact_ref
+example-run,2026-02-19T12:00:00Z,telegram,dm,B-01,PASS,,Help text returned,logs/telegram-help.txt

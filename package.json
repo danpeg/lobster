@@ -4,6 +4,12 @@
   "version": "0.1.0",
   "scripts": {
     "security:scan": "bash ./scripts/scan-secrets.sh",
-    "check:plugin-pack": "cd packages/clawpilot-plugin && npm pack --dry-run"
+    "check:plugin-pack": "cd packages/clawpilot-plugin && npm pack --dry-run",
+    "qa:init-run": "bash ./scripts/qa-init-run.sh",
+    "qa:quick-checks": "bash ./scripts/qa-quick-checks.sh",
+    "audit:sensitive:baseline": "bash ./scripts/audit-sensitive-data.sh baseline",
+    "audit:sensitive:weekly": "bash ./scripts/audit-sensitive-data.sh weekly",
+    "audit:sensitive:monthly": "bash ./scripts/audit-sensitive-data.sh monthly",
+    "audit:sensitive:pr-gate": "bash ./scripts/audit-sensitive-data.sh pr-gate"
   }
 }

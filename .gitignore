@@ -24,3 +24,7 @@ build/
 # Local state
 .tmp/
 tmp/
+
+# QA run outputs
+qa/runs/*
+!qa/runs/.gitkeep
