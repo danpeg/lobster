@@ -6,10 +6,11 @@ const AUTO_JOIN_REPLY_TTL_MS = 8_000;
 const LEGACY_MEETING_LAUNCH_BLOCK_REASON =
   'Meeting launch is managed by ClawPilot plugin/bridge. Use /clawpilot join or paste URL.';
 const LEGACY_MEETING_LAUNCH_PATTERNS = [
-  /(?:^|\/)auto-launch-from-text\.sh(?:\s|$)/i,
-  /(?:^|\/)launch-bot\.sh(?:\s|$)/i,
-  /\/root\/\.openclaw\/recall-webhook\/services\/clawpilot-bridge\//i,
-  /\/root\/openclaw-meeting-copilot\/.*launch-bot\.sh/i,
+  /(?:^|[\s"'`/])auto-launch-from-text\.sh(?:[\s"'`]|$)/i,
+  /(?:^|[\s"'`/])launch-bot\.sh(?:[\s"'`]|$)/i,
+  /\/root\/\.openclaw\/recall-webhook\/services\/clawpilot-bridge(?:\/|\b)/i,
+  /\/root\/openclaw-meeting-copilot\/services\/clawpilot-bridge(?:\/|\b)/i,
+  /\bbash\s+(?:\.[/])?(?:auto-launch-from-text|launch-bot)\.sh(?:\s|$)/i,
 ];
 
 function sanitizeAgentName(value) {
@@ -496,7 +497,16 @@ function extractExecCommandFromHook(event, ctx) {
 function isLegacyMeetingLaunchCommand(rawCommand) {
   const command = String(rawCommand || '');
   if (!command) return false;
-  return LEGACY_MEETING_LAUNCH_PATTERNS.some((pattern) => pattern.test(command));
+  if (LEGACY_MEETING_LAUNCH_PATTERNS.some((pattern) => pattern.test(command))) {
+    return true;
+  }
+
+  const lower = command.toLowerCase();
+  const hasBridgePath =
+    lower.includes('/root/.openclaw/recall-webhook/services/clawpilot-bridge') ||
+    lower.includes('/root/openclaw-meeting-copilot/services/clawpilot-bridge');
+  const hasLauncherScript = /\b(?:auto-launch-from-text|launch-bot)\.sh\b/i.test(command);
+  return hasBridgePath && hasLauncherScript;
 }
 
 function looksLikeStartupPreferenceText(text) {
