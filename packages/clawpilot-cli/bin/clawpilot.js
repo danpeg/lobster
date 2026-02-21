@@ -74,6 +74,41 @@ function ensureEnvFile(repoRoot) {
   return { envFile, exampleFile };
 }
 
+function isValidRepoRoot(candidate) {
+  if (!candidate) return false;
+  const pluginPkg = path.join(candidate, 'packages', 'clawpilot-plugin', 'package.json');
+  const bridgeDir = path.join(candidate, 'services', 'clawpilot-bridge');
+  return fs.existsSync(pluginPkg) && fs.existsSync(bridgeDir);
+}
+
+function findRepoRootFrom(startDir) {
+  let current = path.resolve(startDir);
+  while (true) {
+    if (isValidRepoRoot(current)) return current;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return '';
+}
+
+function resolveRepoRoot() {
+  const envRoot = String(process.env.CLAWPILOT_REPO_ROOT || '').trim();
+  if (envRoot && isValidRepoRoot(envRoot)) {
+    return path.resolve(envRoot);
+  }
+
+  const cwdRoot = findRepoRootFrom(process.cwd());
+  if (cwdRoot) return cwdRoot;
+
+  const openclawDefault = path.join(os.homedir(), '.openclaw', 'clawpilot');
+  if (isValidRepoRoot(openclawDefault)) {
+    return openclawDefault;
+  }
+
+  return '';
+}
+
 function setEnvValue(filePath, key, value) {
   let content = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
   const line = `${key}=${value}`;
@@ -173,7 +208,15 @@ function ensureCloudflaredInstalled() {
 
 function runSetup(args) {
   const fresh = args.includes('--fresh');
-  const repoRoot = path.resolve(__dirname, '..', '..', '..');
+  const repoRoot = resolveRepoRoot();
+  if (!repoRoot) {
+    failWithRemediation(
+      1,
+      'Source check',
+      'Required ClawPilot source checkout was not found.',
+      'Remediation: run this command from your clawpilot repo root (or under services/clawpilot-bridge), or set CLAWPILOT_REPO_ROOT=/absolute/path/to/clawpilot.'
+    );
+  }
   const { envFile, exampleFile } = ensureEnvFile(repoRoot);
   const pluginInstallSpec = String(process.env.CLAWPILOT_PLUGIN_SPEC || REQUIRED_PLUGIN_SPEC).trim() || REQUIRED_PLUGIN_SPEC;
 
