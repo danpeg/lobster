@@ -15,6 +15,16 @@ const LEGACY_MEETING_LAUNCH_PATTERNS = [
   /\/root\/openclaw-meeting-copilot\/services\/clawpilot-bridge(?:\/|\b)/i,
   /\bbash\s+(?:\.[/])?(?:auto-launch-from-text|launch-bot)\.sh(?:\s|$)/i,
 ];
+const LEGACY_PLUGIN_CONFIG_KEYS = [
+  'bridgeBaseUrl',
+  'bridgeToken',
+  'allowRemoteBridge',
+  'teamAgent',
+  'autoJoinMeetingLinks',
+  'autoJoinReplaceActive',
+  'blockLegacyMeetingLaunchScripts',
+  'agentName',
+];
 
 function sanitizeAgentName(value) {
   const normalized = String(value || '')
@@ -75,7 +85,9 @@ function normalizeBridgeBaseUrl(rawUrl, allowRemoteBridge) {
 
 function loadBridgeConfig(api) {
   const cfg = api.runtime.config.loadConfig();
-  const pluginCfg = cfg?.plugins?.entries?.[PLUGIN_ID]?.config || {};
+  const pluginEntry = cloneObject(cfg?.plugins?.entries?.[PLUGIN_ID]);
+  const { legacyConfig } = splitPluginEntryAndLegacyConfig(pluginEntry);
+  const pluginCfg = { ...legacyConfig, ...cloneObject(pluginEntry.config) };
   const allowRemoteBridge = Boolean(pluginCfg.allowRemoteBridge);
   const bridgeBaseUrl = normalizeBridgeBaseUrl(pluginCfg.bridgeBaseUrl || DEFAULT_BRIDGE_URL, allowRemoteBridge);
   const bridgeToken = pluginCfg.bridgeToken || '';
@@ -241,12 +253,25 @@ function cloneObject(value) {
   return { ...value };
 }
 
+function splitPluginEntryAndLegacyConfig(entry) {
+  const pluginEntry = cloneObject(entry);
+  const legacyConfig = {};
+  for (const key of LEGACY_PLUGIN_CONFIG_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(pluginEntry, key)) {
+      legacyConfig[key] = pluginEntry[key];
+      delete pluginEntry[key];
+    }
+  }
+  return { pluginEntry, legacyConfig };
+}
+
 async function updateClawpilotPluginConfig(api, patch) {
   const cfg = api.runtime.config.loadConfig() || {};
   const plugins = cloneObject(cfg.plugins);
   const entries = cloneObject(plugins.entries);
-  const pluginEntry = cloneObject(entries[PLUGIN_ID]);
-  const pluginConfig = cloneObject(pluginEntry.config);
+  const rawPluginEntry = cloneObject(entries[PLUGIN_ID]);
+  const { pluginEntry, legacyConfig } = splitPluginEntryAndLegacyConfig(rawPluginEntry);
+  const pluginConfig = { ...legacyConfig, ...cloneObject(pluginEntry.config) };
   const nextPluginConfig = { ...pluginConfig, ...patch };
   const nextCfg = {
     ...cfg,
