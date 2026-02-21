@@ -126,27 +126,39 @@ function getCloudflaredDownloadUrl() {
   const arch = os.arch();
   const base = 'https://github.com/cloudflare/cloudflared/releases/latest/download';
 
-  if (platform === 'darwin' && arch === 'arm64') return `${base}/cloudflared-darwin-arm64`;
-  if (platform === 'darwin' && arch === 'x64') return `${base}/cloudflared-darwin-amd64`;
-  if (platform === 'linux' && arch === 'x64') return `${base}/cloudflared-linux-amd64`;
-  if (platform === 'linux' && arch === 'arm64') return `${base}/cloudflared-linux-arm64`;
+  if (platform === 'darwin' && arch === 'arm64') return { url: `${base}/cloudflared-darwin-arm64.tgz`, archive: 'tgz' };
+  if (platform === 'darwin' && arch === 'x64') return { url: `${base}/cloudflared-darwin-amd64.tgz`, archive: 'tgz' };
+  if (platform === 'linux' && arch === 'x64') return { url: `${base}/cloudflared-linux-amd64`, archive: 'bin' };
+  if (platform === 'linux' && arch === 'arm64') return { url: `${base}/cloudflared-linux-arm64`, archive: 'bin' };
 
-  return '';
+  return null;
 }
 
 function installCloudflaredFallback() {
-  const url = getCloudflaredDownloadUrl();
-  if (!url) {
+  const download = getCloudflaredDownloadUrl();
+  if (!download) {
     return { ok: false, reason: `Unsupported platform/arch: ${os.platform()}-${os.arch()}` };
   }
 
   const installDir = path.join(os.homedir(), '.clawpilot', 'bin');
   const target = path.join(installDir, 'cloudflared');
+  const archivePath = path.join(installDir, 'cloudflared-download.tgz');
   fs.mkdirSync(installDir, { recursive: true });
 
-  const curl = runCommand('curl', ['-fL', url, '-o', target]);
+  const curlTarget = download.archive === 'tgz' ? archivePath : target;
+  const curl = runCommand('curl', ['-fL', download.url, '-o', curlTarget]);
   if (!curl.ok) {
     return { ok: false, reason: 'curl download failed' };
+  }
+
+  if (download.archive === 'tgz') {
+    const untar = runCommand('tar', ['-xzf', archivePath, '-C', installDir]);
+    if (!untar.ok || !fs.existsSync(target)) {
+      return { ok: false, reason: 'archive extraction failed' };
+    }
+    try {
+      fs.unlinkSync(archivePath);
+    } catch {}
   }
 
   const chmod = runCommand('chmod', ['+x', target]);
