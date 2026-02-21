@@ -1001,6 +1001,14 @@ function buildBridgeUnauthorizedMessage(bridgeToken) {
   ].join(' ');
 }
 
+function isRecallAuthFailure(responseBody) {
+  if (!responseBody || typeof responseBody !== 'object') return false;
+  const code = String(responseBody.code || '').toLowerCase();
+  if (code === 'authentication_failed') return true;
+  const error = String(responseBody.error || '').toLowerCase();
+  return error.includes('authentication failed') || error.includes('recall');
+}
+
 async function callBridge(api, path, options = 'GET') {
   let method = 'GET';
   let body;
@@ -1038,6 +1046,11 @@ async function callBridge(api, path, options = 'GET') {
 
   if (!res.ok) {
     if (res.status === 401) {
+      if (isRecallAuthFailure(responseBody)) {
+        throw new Error(
+          'Recall API authentication failed. Update RECALL_API_KEY in services/clawpilot-bridge/.env, restart the bridge, then retry.'
+        );
+      }
       throw new Error(buildBridgeUnauthorizedMessage(bridgeToken));
     }
     throw new Error(`Bridge call failed (${res.status}): ${formatBridgeErrorBody(responseBody)}`);

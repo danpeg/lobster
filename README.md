@@ -33,9 +33,10 @@ npx @clawpilot/cli setup --fresh
 Setup behavior:
 
 1. Detects legacy Tailscale/ngrok config and fails fast unless `--fresh`.
-2. Installs `cloudflared` (brew/apt when possible, user-local fallback otherwise).
-3. Installs plugin, restarts OpenClaw daemon, verifies plugin load.
-4. Prompts you to run `/clawpilot install` in chat for bridge auth/tunnel checks.
+2. Ensures bridge runtime secrets (`RECALL_API_KEY`, `WEBHOOK_SECRET`) are set.
+3. Installs `cloudflared` (brew/apt when possible, user-local fallback otherwise).
+4. Installs plugin, restarts OpenClaw daemon, verifies plugin load.
+5. Prompts you to run `/clawpilot install` in chat for bridge auth/tunnel checks.
 
 ## Chat-Only Finalizer
 

@@ -3,6 +3,8 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
+const readline = require('readline');
 const { spawnSync } = require('child_process');
 
 const TOTAL_STEPS = 7;
@@ -121,6 +123,61 @@ function setEnvValue(filePath, key, value) {
   fs.writeFileSync(filePath, content, 'utf8');
 }
 
+function getEnvValue(filePath, key) {
+  if (!filePath || !fs.existsSync(filePath)) return '';
+  const content = fs.readFileSync(filePath, 'utf8');
+  const match = content.match(new RegExp(`(?:^|\\n)\\s*${key}=([^\\n]*)`));
+  if (!match) return '';
+  return String(match[1] || '').trim();
+}
+
+function isMissingOrPrompt(value) {
+  const normalized = String(value || '').trim();
+  return !normalized || normalized === '__PROMPT__';
+}
+
+function promptLine(promptText) {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+      terminal: Boolean(process.stdout && process.stdout.isTTY),
+    });
+    rl.question(promptText, (answer) => {
+      rl.close();
+      resolve(String(answer || '').trim());
+    });
+  });
+}
+
+async function ensureBridgeRuntimeSecrets(envFile) {
+  let recallApiKey = String(process.env.RECALL_API_KEY || '').trim() || getEnvValue(envFile, 'RECALL_API_KEY');
+  if (isMissingOrPrompt(recallApiKey)) {
+    if (!process.stdin.isTTY) {
+      return {
+        ok: false,
+        reason: 'RECALL_API_KEY is missing and no interactive terminal is available.',
+      };
+    }
+    recallApiKey = await promptLine('Enter Recall API key (from recall.ai dashboard): ');
+    if (isMissingOrPrompt(recallApiKey)) {
+      return {
+        ok: false,
+        reason: 'RECALL_API_KEY is required.',
+      };
+    }
+    setEnvValue(envFile, 'RECALL_API_KEY', recallApiKey);
+  }
+
+  let webhookSecret = String(process.env.WEBHOOK_SECRET || '').trim() || getEnvValue(envFile, 'WEBHOOK_SECRET');
+  if (isMissingOrPrompt(webhookSecret)) {
+    webhookSecret = crypto.randomBytes(32).toString('hex');
+    setEnvValue(envFile, 'WEBHOOK_SECRET', webhookSecret);
+  }
+
+  return { ok: true };
+}
+
 function getCloudflaredDownloadUrl() {
   const platform = os.platform();
   const arch = os.arch();
@@ -218,7 +275,7 @@ function ensureCloudflaredInstalled() {
   return installCloudflaredFallback();
 }
 
-function runSetup(args) {
+async function runSetup(args) {
   const fresh = args.includes('--fresh');
   const repoRoot = resolveRepoRoot();
   if (!repoRoot) {
@@ -257,6 +314,16 @@ function runSetup(args) {
   } else if (fs.existsSync(exampleFile)) {
     fs.copyFileSync(exampleFile, envFile);
   }
+
+  const secretCheck = await ensureBridgeRuntimeSecrets(envFile);
+  if (!secretCheck.ok) {
+    failWithRemediation(
+      1,
+      'Source check',
+      secretCheck.reason || 'Bridge runtime configuration is incomplete.',
+      'Remediation: set RECALL_API_KEY in services/clawpilot-bridge/.env (or rerun in an interactive shell) and rerun setup.'
+    );
+  }
   passStep(1, 'Source check');
 
   // Step 2: cloudflared install
@@ -284,13 +351,17 @@ function runSetup(args) {
       'Remediation: install/open OpenClaw CLI, then rerun `npx @clawpilot/cli setup`.'
     );
   }
-  const installPlugin = runCommand('openclaw', ['plugins', 'install', pluginInstallSpec]);
+  let installPlugin = runCommand('openclaw', ['plugins', 'install', pluginInstallSpec]);
+  if (!installPlugin.ok) {
+    runCommand('openclaw', ['plugins', 'uninstall', 'clawpilot']);
+    installPlugin = runCommand('openclaw', ['plugins', 'install', pluginInstallSpec]);
+  }
   if (!installPlugin.ok) {
     failWithRemediation(
       3,
       'Install plugin',
       `openclaw plugin installation failed for spec "${pluginInstallSpec}".`,
-      'Remediation: publish @clawpilot/clawpilot@0.3.0+ and rerun, or set CLAWPILOT_PLUGIN_SPEC to a tested tarball/spec.'
+      'Remediation: ensure @clawpilot/clawpilot@0.3.0+ is available and retry. If an old plugin directory remains, run `openclaw plugins uninstall clawpilot` and rerun setup.'
     );
   }
   passStep(3, 'Install plugin');
@@ -327,7 +398,7 @@ function runSetup(args) {
   passStep(7, 'Final pass/fail summary');
 }
 
-(function main() {
+(async function main() {
   const args = process.argv.slice(2);
   const command = args[0];
 
@@ -341,5 +412,10 @@ function runSetup(args) {
     process.exit(1);
   }
 
-  runSetup(args.slice(1));
+  try {
+    await runSetup(args.slice(1));
+  } catch (err) {
+    console.error(String(err?.message || err));
+    process.exit(1);
+  }
 })();
