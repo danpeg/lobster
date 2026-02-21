@@ -6,8 +6,8 @@
 - Added in-bridge quick tunnel manager with restart/backoff and tunnel state in `/health`
 - Added duplicate webhook suppression by `event_id` with bounded in-memory idempotency cache
 - Added startup legacy-config guard with explicit remediation:
-  - `Old config detected. Run \`npx clawpilot setup --fresh\` to reconfigure.`
-- Added new one-click setup CLI package (`clawpilot`) with:
+  - `Old config detected. Run \`npx @clawpilot/cli setup --fresh\` to reconfigure.`
+- Added new one-click setup CLI package (`@clawpilot/cli`) with:
   - cloudflared install (`brew`/`apt`/user-local fallback)
   - plugin install + daemon restart + verify-loaded checks
   - strict step output and fail-fast remediation

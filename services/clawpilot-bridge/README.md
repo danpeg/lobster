@@ -38,7 +38,7 @@ npm start
 Bridge startup fails fast when legacy config is detected (`WEBHOOK_BASE_URL`, Tailscale/ngrok remnants):
 
 ```text
-Old config detected. Run `npx clawpilot setup --fresh` to reconfigure.
+Old config detected. Run `npx @clawpilot/cli setup --fresh` to reconfigure.
 ```
 
 ## Quick Tunnel Behavior

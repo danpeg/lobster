@@ -193,7 +193,7 @@ function runSetup(args) {
         failWithRemediation(
           1,
           'Source check',
-          'Old config detected. Run `npx clawpilot setup --fresh` to reconfigure.',
+          'Old config detected. Run `npx @clawpilot/cli setup --fresh` to reconfigure.',
           'Remediation: rerun with --fresh to rewrite legacy bridge env settings.'
         );
       }
@@ -211,7 +211,7 @@ function runSetup(args) {
       2,
       'Install cloudflared',
       `Could not install cloudflared: ${cloudflared.reason || 'unknown error'}`,
-      'Remediation: install cloudflared manually, then rerun `npx clawpilot setup`.'
+      'Remediation: install cloudflared manually, then rerun `npx @clawpilot/cli setup`.'
     );
   }
   if (envFile) {
@@ -226,7 +226,7 @@ function runSetup(args) {
       3,
       'Install plugin',
       'openclaw CLI was not found in PATH.',
-      'Remediation: install/open OpenClaw CLI, then rerun `npx clawpilot setup`.'
+      'Remediation: install/open OpenClaw CLI, then rerun `npx @clawpilot/cli setup`.'
     );
   }
   const installPlugin = runCommand('openclaw', ['plugins', 'install', pluginInstallSpec]);

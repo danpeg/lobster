@@ -12,5 +12,5 @@ Current architecture baseline (v1):
 
 - Cloudflared quick tunnel ingress (`*.trycloudflare.com`)
 - Local bridge control path (`127.0.0.1`)
-- One-click setup via `npx clawpilot setup`
+- One-click setup via `npx @clawpilot/cli setup`
 - Legacy config fail-fast with `--fresh` remediation

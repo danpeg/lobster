@@ -8,7 +8,7 @@ ClawPilot connects Recall.ai live transcripts to OpenClaw so your copilot can re
 2. OpenClaw model/channel auth already configured
 3. Node.js 18+ on the bridge host
 4. Recall.ai account and API key
-5. `cloudflared` available (or install via `npx clawpilot setup`)
+5. `cloudflared` available (or install via `npx @clawpilot/cli setup`)
 
 ## Install ClawPilot Plugin
 
@@ -21,13 +21,13 @@ openclaw plugins info clawpilot
 ## One-Click Setup (v1)
 
 ```bash
-npx clawpilot setup
+npx @clawpilot/cli setup
 ```
 
 If setup reports legacy config drift, rerun:
 
 ```bash
-npx clawpilot setup --fresh
+npx @clawpilot/cli setup --fresh
 ```
 
 Setup behavior:
@@ -96,7 +96,7 @@ openclaw plugins info clawpilot
 ## Components
 
 1. `packages/clawpilot-plugin`: OpenClaw plugin (`/clawpilot` commands)
-2. `packages/clawpilot-cli`: one-click setup CLI (`npx clawpilot setup`)
+2. `packages/clawpilot-cli`: one-click setup CLI (`npx @clawpilot/cli setup`)
 3. `services/clawpilot-bridge`: Recall webhook receiver + OpenClaw bridge
 4. `scripts/require-cloudflared-quick-tunnel.sh`: quick-tunnel preflight check
 
@@ -110,7 +110,7 @@ openclaw plugins info clawpilot
 ## Troubleshooting
 
 1. `Old config detected...`:
-   run `npx clawpilot setup --fresh`.
+   run `npx @clawpilot/cli setup --fresh`.
 2. `Bridge is unreachable`:
    verify `openclaw plugins info clawpilot` and local bridge `/health`.
 3. Tunnel not up:

@@ -40,7 +40,7 @@ has_legacy_config() {
 }
 
 if [[ -f "$ENV_FILE" ]] && [[ "$FRESH" != "true" ]] && has_legacy_config "$ENV_FILE"; then
-  echo 'Old config detected. Run `npx clawpilot setup --fresh` to reconfigure.'
+  echo 'Old config detected. Run `npx @clawpilot/cli setup --fresh` to reconfigure.'
   exit 1
 fi
 
@@ -96,6 +96,6 @@ Next:
 4) npm start
 
 If reinstall/update resets plugin or bridge config, rerun this script or run:
-  npx clawpilot setup --fresh
+  npx @clawpilot/cli setup --fresh
 
 MSG

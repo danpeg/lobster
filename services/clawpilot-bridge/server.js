@@ -244,7 +244,7 @@ function detectLegacyConfigIssues() {
 const legacyConfigIssues = detectLegacyConfigIssues();
 if (legacyConfigIssues.length > 0) {
   console.error(`[Config] legacy settings detected: ${legacyConfigIssues.join(', ')}`);
-  console.error('Old config detected. Run `npx clawpilot setup --fresh` to reconfigure.');
+  console.error('Old config detected. Run `npx @clawpilot/cli setup --fresh` to reconfigure.');
   process.exit(1);
 }
 

@@ -49,10 +49,10 @@ if [[ -f "$BRIDGE_ENV_FILE" ]]; then
 fi
 
 if [[ -n "${WEBHOOK_BASE_URL:-}" ]]; then
-  fail_check 'Old config detected. Run `npx clawpilot setup --fresh` to reconfigure.'
+  fail_check 'Old config detected. Run `npx @clawpilot/cli setup --fresh` to reconfigure.'
 fi
 if [[ -n "${ALLOW_NGROK_FALLBACK:-}" ]]; then
-  fail_check 'Old config detected. Run `npx clawpilot setup --fresh` to reconfigure.'
+  fail_check 'Old config detected. Run `npx @clawpilot/cli setup --fresh` to reconfigure.'
 fi
 
 CLOUDFLARED_BIN="${CLOUDFLARED_BIN:-cloudflared}"
