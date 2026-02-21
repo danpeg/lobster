@@ -167,6 +167,7 @@ async function main() {
     ];
 
     const webhookPayload = {
+      event_id: 'fixture-duplicate-event-id',
       event: 'transcript.data',
       data: {
         data: {
@@ -189,6 +190,14 @@ async function main() {
     if (webhookRes.status !== 200) {
       throw new Error(`webhook POST failed: ${webhookRes.status} ${webhookRes.raw}`);
     }
+    const duplicateRes = await requestJson({
+      method: 'POST',
+      url: `http://127.0.0.1:${TEST_PORT}/webhook?token=${WEBHOOK_SECRET}`,
+      body: webhookPayload,
+    });
+    if (duplicateRes.status !== 200) {
+      throw new Error(`duplicate webhook POST failed: ${duplicateRes.status} ${duplicateRes.raw}`);
+    }
 
     let latencyMs = null;
     let hookBody = {};
@@ -210,6 +219,10 @@ async function main() {
       const text = hookBody.text || '';
       hasTranscriptMarker = text.includes('[MEETING TRANSCRIPT');
       hasSpeaker = text.includes('Test Speaker:');
+      const waitForDuplicate = Date.now();
+      while (Date.now() - waitForDuplicate < 1200) {
+        await sleep(100);
+      }
     } else {
       const waitStart = Date.now();
       while (Date.now() - waitStart < TIMEOUT_MS) {
@@ -232,16 +245,19 @@ async function main() {
       ok: true,
       mode: usingMockHook ? 'mock_hook' : 'real_gateway',
       webhookStatus: webhookRes.status,
+      duplicateWebhookStatus: duplicateRes.status,
+      duplicateWebhookBody: duplicateRes.body,
       hookCalls: hookEvents.length,
       latencyMs,
       assertions: {
         transcriptMarker: hasTranscriptMarker,
         speakerIncluded: hasSpeaker,
+        duplicateSuppressed: usingMockHook ? hookEvents.length === 1 : true,
       },
       sampleHookPayload: hookBody,
     };
 
-    const assertionFailed = !hasTranscriptMarker || !hasSpeaker;
+    const assertionFailed = !hasTranscriptMarker || !hasSpeaker || (usingMockHook && hookEvents.length !== 1);
     if (assertionFailed) {
       result.ok = false;
       result.error = 'assertion failed';

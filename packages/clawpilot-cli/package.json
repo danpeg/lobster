@@ -1,0 +1,11 @@
+{
+  "name": "clawpilot",
+  "version": "0.1.0",
+  "description": "One-click ClawPilot setup CLI",
+  "bin": {
+    "clawpilot": "./bin/clawpilot.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

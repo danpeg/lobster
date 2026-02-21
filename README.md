@@ -1,7 +1,5 @@
 # ClawPilot
 
-Let your OpenClaw join meetings and actively participate: do research, come up with ideas, create assets as you go.
-
 ClawPilot connects Recall.ai live transcripts to OpenClaw so your copilot can react in real time during meetings.
 
 ## Prerequisites
@@ -10,7 +8,7 @@ ClawPilot connects Recall.ai live transcripts to OpenClaw so your copilot can re
 2. OpenClaw model/channel auth already configured
 3. Node.js 18+ on the bridge host
 4. Recall.ai account and API key
-5. Active Tailscale Funnel URL that routes to bridge (`https://<node>.ts.net`)
+5. `cloudflared` available (or install via `npx clawpilot setup`)
 
 ## Install ClawPilot Plugin
 
@@ -20,48 +18,36 @@ openclaw daemon restart
 openclaw plugins info clawpilot
 ```
 
-AI installer transparency protocol:
+## One-Click Setup (v1)
 
-1. Use `/Users/danpeguine/Projects/lobster/INSTALL_AGENT_PROTOCOL.md`
-2. If installer says only "done", run `/clawpilot install` in chat immediately.
-
-Exact prompt snippet for AI installers:
-
-```text
-Install Lobster and narrate progress in chat using exactly:
-Step N/M: <action> -> <status>
-
-Required phases: source check, install plugin, restart gateway, verify loaded, run /clawpilot install, final pass/fail.
-On first failure: stop, mark FAILED, provide remediation, and do not continue.
-Never print secret values.
+```bash
+npx clawpilot setup
 ```
 
-## Chat-Only Onboarding (WhatsApp/Telegram/Discord)
+If setup reports legacy config drift, rerun:
 
-After install, run in chat:
+```bash
+npx clawpilot setup --fresh
+```
+
+Setup behavior:
+
+1. Detects legacy Tailscale/ngrok config and fails fast unless `--fresh`.
+2. Installs `cloudflared` (brew/apt when possible, user-local fallback otherwise).
+3. Installs plugin, restarts OpenClaw daemon, verifies plugin load.
+4. Prompts you to run `/clawpilot install` in chat for bridge auth/tunnel checks.
+
+## Chat-Only Finalizer
+
+After plugin install, run in chat:
 
 ```text
 /clawpilot install
 ```
 
-`/clawpilot setup` remains supported as an alias.
+`/clawpilot setup` remains an alias in chat.
 
-The setup assistant now explains:
-
-1. Why ClawPilot uses Tailscale Funnel (`https://*.ts.net`) for safer/stable bridge routing.
-2. How to sign up/install Tailscale (links included in chat).
-3. Step-by-step checks (Tailscale login, Funnel URL, bridge health, auth alignment).
-
-No terminal is required for the normal user path.
-
-Plugin-only limitation:
-
-1. First-install narration cannot be hard-enforced before plugin load.
-2. Post-install transparency is guaranteed once plugin is loaded via `/clawpilot install`.
-
-## Configure Runtime (Required)
-
-Bootstrap your env file:
+## Configure Bridge Runtime
 
 ```bash
 ./scripts/bootstrap-recall.sh
@@ -71,53 +57,28 @@ npm install
 npm start
 ```
 
-Bootstrap enforces Funnel alignment and fails fast unless:
-
-1. `WEBHOOK_BASE_URL` is `https://*.ts.net`
-2. Local bridge `/health` is reachable
-3. Public Funnel `/health` reaches the same bridge
-
-Required environment variables:
+Required bridge env:
 
 1. `RECALL_API_KEY`
-2. `RECALL_API_BASE` (match your Recall workspace region)
+2. `RECALL_API_BASE`
 3. `WEBHOOK_SECRET`
-4. `WEBHOOK_BASE_URL` (required `https://*.ts.net` for supported install/reinstall/update)
-5. `BRIDGE_API_TOKEN` (strongly recommended; bearer token for bridge control routes)
 
-OpenClaw integration values are loaded from `openclaw.json`:
+Optional bridge env:
 
-6. `hooks.*` (for `/hooks/wake` + token)
-7. `channels.discord.botToken` (for direct Discord delivery)
-8. If bridge runs as a different OS user, set `OPENCLAW_CONFIG_PATH` to the correct `openclaw.json`
+1. `CLOUDFLARED_BIN` (default `cloudflared`)
+2. `BRIDGE_API_TOKEN` (recommended)
+3. `OPENCLAW_CONFIG_PATH` (if bridge user differs)
 
-Optional bridge behavior:
-
-9. `DISCORD_DIRECT_DELIVERY` (default: `true`)
-
-Routing is channel-agnostic by default (via OpenClaw hooks). Discord direct delivery is an optional reliability adapter with fallback to OpenClaw hooks.
-
-Plugin auth alignment:
-
-- Configure plugin `bridgeToken` to exactly match `BRIDGE_API_TOKEN` once bridge auth is enabled.
-- Reinstall/reset can clear plugin config. Rerun bootstrap + auth checks after reinstall/update.
-
-Quick preflight checks:
+Quick preflight:
 
 ```bash
-./scripts/require-tailscale-funnel.sh
+./scripts/require-cloudflared-quick-tunnel.sh
 RUN_VPS_AUTH_CHECK=true npm run qa:quick-checks
 ```
 
-Private VPS deploy preflight flags (for `/Users/danpeguine/Projects/clawpilot-vps-cycle.sh`):
-
-1. `BRIDGE_TOKEN_ENV_FILE` (token source)
-2. `BRIDGE_WEBHOOK_ENV_FILE` (webhook/Funnel source; defaults to token env file)
-3. `BRIDGE_AUTH_PREFLIGHT` (`true` by default; validates 401 unauth + 200 auth)
-
 ## Verify End-to-End
 
-1. Bridge health:
+1. Local bridge health:
 ```bash
 curl -s http://127.0.0.1:3001/health
 ```
@@ -125,78 +86,34 @@ curl -s http://127.0.0.1:3001/health
 ```bash
 openclaw plugins info clawpilot
 ```
-3. In OpenClaw chat, run:
+3. Chat checks:
 ```text
 /clawpilot help
-```
-4. Launch a meeting bot directly from chat:
-```text
+/clawpilot status
 /clawpilot join https://meet.google.com/abc-defg-hij
 ```
-Optional custom name:
-```text
-/clawpilot join https://meet.google.com/abc-defg-hij --name "Dan Note Taker"
-```
-Toggle transcript mirroring in active chat:
-```text
-/clawpilot transcript on
-/clawpilot transcript off
-```
-Mode and privacy controls:
-```text
-/clawpilot mode
-/clawpilot mode brainstorm
-/clawpilot audience private
-/clawpilot audience shared
-/clawpilot privacy
-/clawpilot reveal context
-```
-5. Confirm transcripts trigger copilot responses.
 
 ## Components
 
-1. `packages/clawpilot-plugin`: npm-installable OpenClaw plugin (`/clawpilot` command)
-2. `services/clawpilot-bridge`: Recall webhook receiver and OpenClaw hook bridge
-3. `services/clawpilot-bridge/prompts/lobster.md`: editable meeting copilot prompt pack
+1. `packages/clawpilot-plugin`: OpenClaw plugin (`/clawpilot` commands)
+2. `packages/clawpilot-cli`: one-click setup CLI (`npx clawpilot setup`)
+3. `services/clawpilot-bridge`: Recall webhook receiver + OpenClaw bridge
+4. `scripts/require-cloudflared-quick-tunnel.sh`: quick-tunnel preflight check
 
 ## Security Notes
 
-1. The plugin does not read environment variables at runtime.
-2. The plugin only calls your configured bridge endpoint for explicit `/clawpilot` commands.
-3. Non-private bridge hosts are blocked by default unless `allowRemoteBridge` is explicitly enabled.
-4. `/launch` responses are sanitized and do not return webhook URLs or tokens.
-
-## Branches
-
-1. `main`: stable release path
-2. `experimental`: active development, includes Notion and Google Docs integrations
-
-## Release
-
-1. Develop on `experimental`
-2. Merge curated changes to `main`
-3. Run checks:
-   - `npm run security:scan`
-   - `npm run check:plugin-pack`
-4. Publish plugin package from `packages/clawpilot-plugin`
-
-See `RELEASING.md` for full steps.
+1. Bridge `/webhook` validates query token (`WEBHOOK_SECRET`).
+2. Bridge control routes can require bearer auth via `BRIDGE_API_TOKEN`.
+3. Plugin bridge calls are local-only in v1 (localhost/127.0.0.1/::1).
+4. Webhook duplicate events are suppressed by in-memory event-id cache.
 
 ## Troubleshooting
 
-1. `plugin not found`:
-   restart OpenClaw daemon and run `openclaw plugins doctor`
-2. No copilot reaction:
-   verify bridge `.env` values and check bridge logs
-3. Recall webhook failures:
-   confirm `WEBHOOK_BASE_URL` is `https://*.ts.net` and run `./scripts/require-tailscale-funnel.sh`
-4. Reinstall/update followed by 401 errors:
-   re-sync plugin token and restart daemon
-   `openclaw config set plugins.entries.clawpilot.config.bridgeToken "<BRIDGE_API_TOKEN>"`
-   `openclaw daemon restart`
-5. `ClawPilot command failed: fetch failed`:
-   verify plugin bridge URL points to a running bridge and Funnel health is green:
-   `openclaw config get plugins.entries.clawpilot.config.bridgeBaseUrl`
-   `curl -s https://<node>.ts.net/health`
-6. Installer replied "done" but commands fail:
-   run `/clawpilot install` in chat; it performs step-by-step recovery and remediation.
+1. `Old config detected...`:
+   run `npx clawpilot setup --fresh`.
+2. `Bridge is unreachable`:
+   verify `openclaw plugins info clawpilot` and local bridge `/health`.
+3. Tunnel not up:
+   inspect `/health` `tunnel.*` fields and verify `cloudflared` is installed.
+4. 401 errors:
+   align plugin `bridgeToken` with `BRIDGE_API_TOKEN` and restart daemon.

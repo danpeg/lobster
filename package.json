@@ -5,6 +5,7 @@
   "scripts": {
     "security:scan": "bash ./scripts/scan-secrets.sh",
     "check:plugin-pack": "cd packages/clawpilot-plugin && npm pack --dry-run",
+    "check:cli-pack": "cd packages/clawpilot-cli && npm pack --dry-run",
     "qa:init-run": "bash ./scripts/qa-init-run.sh",
     "qa:quick-checks": "bash ./scripts/qa-quick-checks.sh",
     "audit:sensitive:baseline": "bash ./scripts/audit-sensitive-data.sh baseline",

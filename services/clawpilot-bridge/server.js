@@ -11,6 +11,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const meeting = require('./meeting-page.js');
+const { CloudflaredQuickTunnelManager } = require('./tunnel-manager.js');
 const {
   createPromptManager,
   FALLBACK_MODE,
@@ -136,16 +137,21 @@ const OPENCLAW_HOOK_DEFAULTS = readOpenClawHookDefaults();
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 const BRIDGE_API_TOKEN = String(process.env.BRIDGE_API_TOKEN || '').trim();
 const BRIDGE_AUTH_ENABLED = BRIDGE_API_TOKEN.length > 0;
-const WEBHOOK_BASE_URL = process.env.WEBHOOK_BASE_URL || `http://127.0.0.1:${PORT}`;
+const CLOUDFLARED_BIN = String(process.env.CLOUDFLARED_BIN || 'cloudflared').trim() || 'cloudflared';
+const CLOUDFLARED_READY_TIMEOUT_MS = Number(process.env.CLOUDFLARED_READY_TIMEOUT_MS || 20000);
 const RECALL_API_BASE = String(process.env.RECALL_API_BASE || 'https://eu-central-1.recall.ai').replace(/\/+$/, '');
 const RECALL_BOTS_ENDPOINT = `${RECALL_API_BASE}/api/v1/bot`;
 const DEFAULT_RECALL_LANGUAGE = process.env.RECALL_LANGUAGE_CODE || 'en';
 const DEFAULT_RECALL_STT_MODE = process.env.RECALL_STT_MODE || 'prioritize_low_latency';
-const OPENCLAW_HOOK_URL = OPENCLAW_HOOK_DEFAULTS.hookUrl || 'http://127.0.0.1:18789/hooks/wake';
-const OPENCLAW_HOOK_TOKEN = OPENCLAW_HOOK_DEFAULTS.hookToken || '';
+const OPENCLAW_HOOK_URL = String(process.env.OPENCLAW_HOOK_URL || OPENCLAW_HOOK_DEFAULTS.hookUrl || 'http://127.0.0.1:18789/hooks/wake').trim();
+const OPENCLAW_HOOK_TOKEN = String(process.env.OPENCLAW_HOOK_TOKEN || OPENCLAW_HOOK_DEFAULTS.hookToken || '').trim();
 const OPENCLAW_AGENT_NAME_DEFAULT = sanitizeBotName(OPENCLAW_HOOK_DEFAULTS.agentName || '');
-const OPENCLAW_HOOK_URL_SOURCE = OPENCLAW_HOOK_DEFAULTS.hookUrl ? 'openclaw.json' : 'builtin-default';
-const OPENCLAW_HOOK_TOKEN_SOURCE = OPENCLAW_HOOK_DEFAULTS.hookToken ? 'openclaw.json' : 'missing';
+const OPENCLAW_HOOK_URL_SOURCE = process.env.OPENCLAW_HOOK_URL
+  ? 'env'
+  : (OPENCLAW_HOOK_DEFAULTS.hookUrl ? 'openclaw.json' : 'builtin-default');
+const OPENCLAW_HOOK_TOKEN_SOURCE = process.env.OPENCLAW_HOOK_TOKEN
+  ? 'env'
+  : (OPENCLAW_HOOK_DEFAULTS.hookToken ? 'openclaw.json' : 'missing');
 const REPLACE_ACTIVE_ON_DUPLICATE = process.env.REPLACE_ACTIVE_ON_DUPLICATE !== 'false';
 const BOT_REPLACE_WAIT_TIMEOUT_MS = Number(process.env.BOT_REPLACE_WAIT_TIMEOUT_MS || 45000);
 const BOT_REPLACE_POLL_MS = Number(process.env.BOT_REPLACE_POLL_MS || 1500);
@@ -155,12 +161,16 @@ const MEETING_TRANSCRIPT_MAX_CHARS = Number(process.env.MEETING_TRANSCRIPT_MAX_C
 
 // Optional Telegram bridge settings for debug/typing feedback
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
-const TELEGRAM_BOT_TOKEN = OPENCLAW_HOOK_DEFAULTS.telegramBotToken || '';
-const TELEGRAM_BOT_TOKEN_SOURCE = OPENCLAW_HOOK_DEFAULTS.telegramBotToken ? 'openclaw.json' : 'missing';
+const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || OPENCLAW_HOOK_DEFAULTS.telegramBotToken || '').trim();
+const TELEGRAM_BOT_TOKEN_SOURCE = process.env.TELEGRAM_BOT_TOKEN
+  ? 'env'
+  : (OPENCLAW_HOOK_DEFAULTS.telegramBotToken ? 'openclaw.json' : 'missing');
 const DEBUG_MIRROR_TELEGRAM = parseBooleanLike(process.env.DEBUG_MIRROR_TELEGRAM, false);
 const CONTROL_SPEAKER_REGEX = process.env.CONTROL_SPEAKER_REGEX || '';
-const DISCORD_BOT_TOKEN = OPENCLAW_HOOK_DEFAULTS.discordBotToken || '';
-const DISCORD_BOT_TOKEN_SOURCE = OPENCLAW_HOOK_DEFAULTS.discordBotToken ? 'openclaw.json' : 'missing';
+const DISCORD_BOT_TOKEN = String(process.env.DISCORD_BOT_TOKEN || OPENCLAW_HOOK_DEFAULTS.discordBotToken || '').trim();
+const DISCORD_BOT_TOKEN_SOURCE = process.env.DISCORD_BOT_TOKEN
+  ? 'env'
+  : (OPENCLAW_HOOK_DEFAULTS.discordBotToken ? 'openclaw.json' : 'missing');
 const DISCORD_DIRECT_DELIVERY = parseBooleanLike(process.env.DISCORD_DIRECT_DELIVERY, true);
 const DISCORD_MAX_MESSAGE_CHARS = 2000;
 const DISCORD_DIRECT_MAX_RETRIES = 2;
@@ -169,6 +179,8 @@ const OPENCLAW_CLI_BIN = String(process.env.OPENCLAW_CLI_BIN || 'openclaw').trim
 const OPENCLAW_COPILOT_CLI_ROUTED = parseBooleanLike(process.env.OPENCLAW_COPILOT_CLI_ROUTED, false);
 const OPENCLAW_AGENT_CLI_TIMEOUT_MS = Number(process.env.OPENCLAW_AGENT_CLI_TIMEOUT_MS || 45000);
 const OPENCLAW_MESSAGE_CLI_TIMEOUT_MS = Number(process.env.OPENCLAW_MESSAGE_CLI_TIMEOUT_MS || 20000);
+const WEBHOOK_EVENT_ID_TTL_MS = Number(process.env.WEBHOOK_EVENT_ID_TTL_MS || 10 * 60 * 1000);
+const WEBHOOK_EVENT_ID_MAX = Number(process.env.WEBHOOK_EVENT_ID_MAX || 5000);
 const BRIDGE_STATE_FILE_RAW = String(process.env.BRIDGE_STATE_FILE || '.bridge-state.json').trim();
 const BRIDGE_STATE_FILE = path.isAbsolute(BRIDGE_STATE_FILE_RAW)
   ? BRIDGE_STATE_FILE_RAW
@@ -203,6 +215,49 @@ const DEFAULT_MEETING_START_PROMPT = [
   'Current: **{{ACTIVE_MODE}}** mode, **{{ACTIVE_AUDIENCE}}** audience'
 ].join('\n');
 let cachedMeetingStartPrompt = null;
+
+function detectLegacyConfigIssues() {
+  const issues = [];
+  const webhookBaseUrl = String(process.env.WEBHOOK_BASE_URL || '').trim();
+  if (webhookBaseUrl) {
+    issues.push('WEBHOOK_BASE_URL');
+    if (webhookBaseUrl.includes('.ts.net')) {
+      issues.push('WEBHOOK_BASE_URL(ts.net)');
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(process.env, 'ALLOW_NGROK_FALLBACK')) {
+    issues.push('ALLOW_NGROK_FALLBACK');
+  }
+  const suspicious = [
+    ['TAILSCALE_FUNNEL_URL', process.env.TAILSCALE_FUNNEL_URL],
+    ['TAILSCALE_AUTHKEY', process.env.TAILSCALE_AUTHKEY],
+    ['NGROK_AUTHTOKEN', process.env.NGROK_AUTHTOKEN],
+  ];
+  for (const [name, value] of suspicious) {
+    if (String(value || '').trim()) {
+      issues.push(name);
+    }
+  }
+  return issues;
+}
+
+const legacyConfigIssues = detectLegacyConfigIssues();
+if (legacyConfigIssues.length > 0) {
+  console.error(`[Config] legacy settings detected: ${legacyConfigIssues.join(', ')}`);
+  console.error('Old config detected. Run `npx clawpilot setup --fresh` to reconfigure.');
+  process.exit(1);
+}
+
+if (!WEBHOOK_SECRET) {
+  console.error('[Config] WEBHOOK_SECRET is required.');
+  process.exit(1);
+}
+
+const tunnelManager = new CloudflaredQuickTunnelManager({
+  binary: CLOUDFLARED_BIN,
+  localUrl: `http://127.0.0.1:${PORT}`,
+  logger: console,
+});
 
 if (DISCORD_DIRECT_DELIVERY && !DISCORD_BOT_TOKEN) {
   console.warn('[DiscordDirect] DISCORD_DIRECT_DELIVERY enabled but Discord bot token was not found in openclaw.json. Falling back to OpenClaw hooks.');
@@ -245,6 +300,62 @@ function safeParseJson(raw) {
   } catch {
     return null;
   }
+}
+
+const seenWebhookEventIds = new Map();
+
+function pruneSeenWebhookEventIds(nowMs = Date.now()) {
+  const ttlMs = Math.max(1, WEBHOOK_EVENT_ID_TTL_MS);
+  for (const [eventId, ts] of seenWebhookEventIds.entries()) {
+    if (nowMs - ts > ttlMs) {
+      seenWebhookEventIds.delete(eventId);
+    }
+  }
+  const maxEntries = Math.max(100, WEBHOOK_EVENT_ID_MAX);
+  while (seenWebhookEventIds.size > maxEntries) {
+    const firstKey = seenWebhookEventIds.keys().next().value;
+    if (!firstKey) break;
+    seenWebhookEventIds.delete(firstKey);
+  }
+}
+
+function extractWebhookEventId(event) {
+  const candidates = [
+    event?.event_id,
+    event?.id,
+    event?.data?.event_id,
+    event?.data?.id,
+    event?.data?.data?.event_id,
+    event?.metadata?.event_id,
+    event?.meta?.event_id,
+  ];
+  for (const value of candidates) {
+    if (value === null || value === undefined) continue;
+    const eventId = String(value).trim();
+    if (eventId) return eventId;
+  }
+  return '';
+}
+
+function markWebhookEventSeen(eventId) {
+  if (!eventId) return false;
+  const nowMs = Date.now();
+  pruneSeenWebhookEventIds(nowMs);
+  if (seenWebhookEventIds.has(eventId)) {
+    return true;
+  }
+  seenWebhookEventIds.set(eventId, nowMs);
+  pruneSeenWebhookEventIds(nowMs);
+  return false;
+}
+
+async function ensurePublicWebhookBaseUrl() {
+  const publicUrl = await tunnelManager.ensureStarted(CLOUDFLARED_READY_TIMEOUT_MS);
+  const normalized = String(publicUrl || '').trim().replace(/\/$/, '');
+  if (!normalized) {
+    throw new Error('cloudflared quick tunnel URL is empty');
+  }
+  return normalized;
 }
 
 function splitDiscordMessage(content, maxChars = DISCORD_MAX_MESSAGE_CHARS) {
@@ -1444,6 +1555,7 @@ function buildSafeLaunchResponse(raw = {}, fallback = {}) {
 // Health check
 app.get('/health', (req, res) => {
   const session = ensureSessionDefaults(activeMeetingSessionId);
+  const tunnelState = tunnelManager.getState();
   res.json({
     status: 'ok',
     uptime: process.uptime(),
@@ -1475,7 +1587,13 @@ app.get('/health', (req, res) => {
     telegram: {
       token_set: Boolean(TELEGRAM_BOT_TOKEN),
       token_source: TELEGRAM_BOT_TOKEN_SOURCE
-    }
+    },
+    tunnel: tunnelState,
+    webhook_event_cache: {
+      size: seenWebhookEventIds.size,
+      ttl_ms: WEBHOOK_EVENT_ID_TTL_MS,
+      max_entries: WEBHOOK_EVENT_ID_MAX,
+    },
   });
 });
 
@@ -2009,6 +2127,20 @@ app.post('/launch', requireBridgeAuth, async (req, res) => {
   const requestedOwnerBinding = normalizeOwnerBinding(owner_binding);
   const requestedTeamAgent = Boolean(parseBooleanLike(team_agent, false));
   const launchSessionId = extractSessionFromMeetingValue(meeting_url) || activeMeetingSessionId;
+  let publicWebhookBaseUrl = '';
+
+  try {
+    publicWebhookBaseUrl = await ensurePublicWebhookBaseUrl();
+  } catch (err) {
+    return res.status(503).json(buildSafeLaunchResponse({
+      status: 'launch_failed',
+      meeting_url,
+      meeting_session: normalizeMeetingSessionId(launchSessionId),
+      routing_target: requestedRouteTarget || null,
+      error: 'Cloudflared quick tunnel unavailable',
+      code: 'tunnel_unavailable',
+    }));
+  }
 
   const shouldReplaceActive = typeof replace_active === 'boolean'
     ? replace_active
@@ -2097,7 +2229,7 @@ app.post('/launch', requireBridgeAuth, async (req, res) => {
       realtime_endpoints: [
         {
           type: 'webhook',
-          url: `${WEBHOOK_BASE_URL.replace(/\/$/, '')}/webhook?token=${WEBHOOK_SECRET}`,
+          url: `${publicWebhookBaseUrl}/webhook?token=${WEBHOOK_SECRET}`,
           events: ['transcript.data', 'transcript.partial_data']
         }
       ]
@@ -2190,9 +2322,17 @@ app.post('/webhook', (req, res) => {
   }
   
   const event = req.body;
+  const eventId = extractWebhookEventId(event);
+  const isDuplicate = eventId ? markWebhookEventSeen(eventId) : false;
+  if (isDuplicate) {
+    console.log(
+      `[${new Date().toISOString()}] Webhook duplicate ignored: ${eventType} event_id=${eventId}`
+    );
+    return res.status(200).json({ received: true, duplicate: true });
+  }
   
   console.log(
-    `[${new Date().toISOString()}] Webhook received: ${eventType} token=${tokenPreview}`
+    `[${new Date().toISOString()}] Webhook received: ${eventType} token=${tokenPreview} event_id=${eventId || 'missing'}`
   );
 
   // Ack immediately to avoid upstream webhook backpressure when reactions are slow.
@@ -2862,15 +3002,32 @@ app.get('/meeting/state', requireBridgeAuth, (req, res) => {
 console.log('[Meeting] Canvas endpoints ready at /meeting');
 
 // Start server after all routes are registered.
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
   console.log(`Recall webhook server running on port ${PORT}`);
-  console.log(`Webhook URL: ${WEBHOOK_BASE_URL.replace(/\/$/, '')}/webhook`);
+  console.log('Webhook URL: managed by cloudflared quick tunnel (dynamic per runtime)');
   console.log(`Health check: http://localhost:${PORT}/health`);
+  console.log(`[Tunnel] binary=${CLOUDFLARED_BIN}`);
   console.log(`[OpenClawHook] wake=${OPENCLAW_HOOK_URL} agent=${OPENCLAW_AGENT_HOOK_URL}`);
   console.log(`[BridgeAuth] ${BRIDGE_AUTH_ENABLED ? 'enabled' : 'disabled'}${BRIDGE_AUTH_ENABLED ? '' : ' (set BRIDGE_API_TOKEN to enforce bearer auth on bridge control routes)'}`);
   console.log(`[OpenClawHook] token=${OPENCLAW_HOOK_TOKEN ? 'set' : 'missing'} url_source=${OPENCLAW_HOOK_URL_SOURCE} token_source=${OPENCLAW_HOOK_TOKEN_SOURCE}`);
   console.log(`[Prompt] path=${promptManager.getPromptPath()} default_mode=${resolveModeOrDefault(promptManager.getDefaultMode())}`);
+  tunnelManager.ensureStarted(CLOUDFLARED_READY_TIMEOUT_MS)
+    .then((url) => {
+      console.log(`[Tunnel] public webhook base URL ready: ${url}`);
+    })
+    .catch((error) => {
+      console.warn(`[Tunnel] startup pending: ${error.message}`);
+    });
   if (!OPENCLAW_HOOK_TOKEN) {
     console.warn(`[OpenClawHook] token missing. Configure hooks.token in ${OPENCLAW_HOOK_DEFAULTS.configPath}`);
   }
 });
+
+function shutdownServer() {
+  tunnelManager.stop();
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 2000).unref();
+}
+
+process.on('SIGINT', shutdownServer);
+process.on('SIGTERM', shutdownServer);

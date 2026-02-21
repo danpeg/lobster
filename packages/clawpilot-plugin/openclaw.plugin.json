@@ -22,10 +22,6 @@
         "type": "boolean",
         "description": "Treat this copilot as a team agent (shared-safe team context rules)."
       },
-      "allowRemoteBridge": {
-        "type": "boolean",
-        "description": "Allow non-private bridge hosts. Keep false unless you explicitly trust a remote endpoint."
-      },
       "autoJoinMeetingLinks": {
         "type": "boolean",
         "description": "Automatically launch a meeting bot when a plain meeting URL is posted."
@@ -56,10 +52,6 @@
     "teamAgent": {
       "label": "Team Agent",
       "help": "Enable when this copilot serves a team workspace rather than a personal owner context."
-    },
-    "allowRemoteBridge": {
-      "label": "Allow Remote Bridge",
-      "help": "Off by default. Enable only for trusted non-private endpoints."
     },
     "autoJoinMeetingLinks": {
       "label": "Auto-Join Meeting Links",

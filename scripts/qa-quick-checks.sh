@@ -29,11 +29,11 @@ mkdir -p "$OUT_DIR"
   echo
 
   if is_truthy "$RUN_VPS_AUTH_CHECK"; then
-    echo "[qa-quick-checks] RUN_VPS_AUTH_CHECK=true -> running bridge/funnel auth preflight"
+    echo "[qa-quick-checks] RUN_VPS_AUTH_CHECK=true -> running bridge/quick-tunnel auth preflight"
     (cd "$ROOT_DIR" && ./scripts/qa-bridge-auth-check.sh "$RUN_ID")
     echo
   else
-    echo "[qa-quick-checks] RUN_VPS_AUTH_CHECK=false -> skipping bridge/funnel auth preflight"
+    echo "[qa-quick-checks] RUN_VPS_AUTH_CHECK=false -> skipping bridge/quick-tunnel auth preflight"
     echo
   fi
 

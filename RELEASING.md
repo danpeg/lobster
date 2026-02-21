@@ -7,6 +7,7 @@ git checkout experimental
 git pull
 npm run security:scan
 npm run check:plugin-pack
+npm run check:cli-pack
 ```
 
 ## 2. Promote to main
@@ -14,10 +15,14 @@ npm run check:plugin-pack
 - Open PR from `experimental` to `main`
 - Merge after review and checks pass
 
-## 3. Publish npm package
+## 3. Publish npm packages
 
 ```bash
 cd packages/clawpilot-plugin
+npm version minor
+npm publish --access public
+
+cd ../clawpilot-cli
 npm version patch
 npm publish --access public
 ```

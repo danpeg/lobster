@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0] - 2026-02-21
+
+- Hard cutover to Cloudflared quick tunnels for Recall webhook ingress (no Tailscale/ngrok flow)
+- Added in-bridge quick tunnel manager with restart/backoff and tunnel state in `/health`
+- Added duplicate webhook suppression by `event_id` with bounded in-memory idempotency cache
+- Added startup legacy-config guard with explicit remediation:
+  - `Old config detected. Run \`npx clawpilot setup --fresh\` to reconfigure.`
+- Added new one-click setup CLI package (`clawpilot`) with:
+  - cloudflared install (`brew`/`apt`/user-local fallback)
+  - plugin install + daemon restart + verify-loaded checks
+  - strict step output and fail-fast remediation
+- Updated plugin setup/connect UX to local bridge only (`127.0.0.1`) and quick-tunnel health checks
+
 ## [0.2.2] - 2026-02-17
 
 - Changed `/clawpilot join` response to a concise summary instead of full raw Recall JSON payload
@@ -59,7 +72,7 @@
 ## [0.1.1] - 2026-02-17
 
 - Removed plugin environment variable fallback reads for bridge URL/token
-- Added bridge host allowlist (localhost, private IPs, and `*.ts.net` by default)
+- Added bridge host allowlist (localhost/private hosts at the time)
 - Added explicit `allowRemoteBridge` opt-in for non-private endpoints
 
 ## [0.1.0] - 2026-02-17

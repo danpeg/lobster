@@ -1,6 +1,6 @@
 {
   "name": "@clawpilot/clawpilot",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Let your OpenClaw join meetings and actively participate: do research, come up with ideas, create assets as you go.",
   "type": "module",
   "openclaw": {

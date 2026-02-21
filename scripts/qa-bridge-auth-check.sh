@@ -10,7 +10,7 @@ BRIDGE_STATUS_URL="${BRIDGE_STATUS_URL:-${BRIDGE_BASE_URL%/}/copilot/status}"
 BRIDGE_HEALTH_URL="${BRIDGE_HEALTH_URL:-${BRIDGE_BASE_URL%/}/health}"
 BRIDGE_TOKEN_ENV_FILE="${BRIDGE_TOKEN_ENV_FILE:-$ROOT_DIR/services/clawpilot-bridge/.env}"
 BRIDGE_WEBHOOK_ENV_FILE="${BRIDGE_WEBHOOK_ENV_FILE:-$BRIDGE_TOKEN_ENV_FILE}"
-FUNNEL_CHECK_SCRIPT="$ROOT_DIR/scripts/require-tailscale-funnel.sh"
+QUICK_TUNNEL_CHECK_SCRIPT="$ROOT_DIR/scripts/require-cloudflared-quick-tunnel.sh"
 
 mkdir -p "$OUT_DIR"
 : > "$OUT_FILE"
@@ -90,15 +90,15 @@ if [[ "$PLUGIN_TOKEN" != "$BRIDGE_API_TOKEN" ]]; then
 fi
 log_line "SUMMARY plugin_token_aligned=true"
 
-if [[ ! -x "$FUNNEL_CHECK_SCRIPT" ]]; then
-  fail_check "Missing executable funnel check script: $FUNNEL_CHECK_SCRIPT"
+if [[ ! -x "$QUICK_TUNNEL_CHECK_SCRIPT" ]]; then
+  fail_check "Missing executable quick tunnel check script: $QUICK_TUNNEL_CHECK_SCRIPT"
 fi
 
-log_line "[qa-bridge-auth-check] running Funnel alignment check"
+log_line "[qa-bridge-auth-check] running cloudflared quick tunnel alignment check"
 OUT_FILE="$OUT_FILE" \
 BRIDGE_ENV_FILE="$BRIDGE_WEBHOOK_ENV_FILE" \
 BRIDGE_HEALTH_URL="$BRIDGE_HEALTH_URL" \
-"$FUNNEL_CHECK_SCRIPT"
+"$QUICK_TUNNEL_CHECK_SCRIPT"
 
 log_line "[qa-bridge-auth-check] finished_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 log_line "[qa-bridge-auth-check] result=PASS"
