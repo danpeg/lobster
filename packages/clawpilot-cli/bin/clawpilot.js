@@ -6,6 +6,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const TOTAL_STEPS = 7;
+const REQUIRED_PLUGIN_SPEC = '@clawpilot/clawpilot@^0.3.0';
 
 function printUsage() {
   console.log('Usage: clawpilot setup [--fresh]');
@@ -174,6 +175,7 @@ function runSetup(args) {
   const fresh = args.includes('--fresh');
   const repoRoot = path.resolve(__dirname, '..', '..', '..');
   const { envFile, exampleFile } = ensureEnvFile(repoRoot);
+  const pluginInstallSpec = String(process.env.CLAWPILOT_PLUGIN_SPEC || REQUIRED_PLUGIN_SPEC).trim() || REQUIRED_PLUGIN_SPEC;
 
   // Step 1: source check + legacy config check
   if (!fs.existsSync(path.join(repoRoot, 'packages', 'clawpilot-plugin', 'package.json'))) {
@@ -227,13 +229,13 @@ function runSetup(args) {
       'Remediation: install/open OpenClaw CLI, then rerun `npx clawpilot setup`.'
     );
   }
-  const installPlugin = runCommand('openclaw', ['plugins', 'install', '@clawpilot/clawpilot']);
+  const installPlugin = runCommand('openclaw', ['plugins', 'install', pluginInstallSpec]);
   if (!installPlugin.ok) {
     failWithRemediation(
       3,
       'Install plugin',
-      'openclaw plugin installation failed.',
-      'Remediation: run `openclaw plugins install @clawpilot/clawpilot` and resolve any CLI errors.'
+      `openclaw plugin installation failed for spec "${pluginInstallSpec}".`,
+      'Remediation: publish @clawpilot/clawpilot@0.3.0+ and rerun, or set CLAWPILOT_PLUGIN_SPEC to a tested tarball/spec.'
     );
   }
   passStep(3, 'Install plugin');
