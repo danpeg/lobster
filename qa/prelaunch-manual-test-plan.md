@@ -114,6 +114,8 @@ Success criteria:
 | B-16 | Privacy status | Send `/clawpilot privacy` | Owner binding + reveal status shown |
 | B-17 | Reveal grant | Owner sends `/clawpilot reveal context` | One-time reveal grant confirmed |
 | B-18 | Bridge unavailable handling | Stop bridge temporarily; send `/clawpilot status` | User-friendly command failed message |
+| B-19 | Installer narration format | Ask installer AI to install from repo using protocol | Step-by-step `Step N/M: ... -> OK/FAILED` lines shown (best-effort) |
+| B-20 | Status auto-remediation after install drift | Simulate bridge/auth drift; send `/clawpilot status` | Plugin returns guided `/clawpilot install` recovery steps with PASS/FAIL style output |
 
 ### C. Cross-Chat Routing Correctness
 

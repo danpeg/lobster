@@ -20,13 +20,31 @@ openclaw daemon restart
 openclaw plugins info clawpilot
 ```
 
+AI installer transparency protocol:
+
+1. Use `/Users/danpeguine/Projects/lobster/INSTALL_AGENT_PROTOCOL.md`
+2. If installer says only "done", run `/clawpilot install` in chat immediately.
+
+Exact prompt snippet for AI installers:
+
+```text
+Install Lobster and narrate progress in chat using exactly:
+Step N/M: <action> -> <status>
+
+Required phases: source check, install plugin, restart gateway, verify loaded, run /clawpilot install, final pass/fail.
+On first failure: stop, mark FAILED, provide remediation, and do not continue.
+Never print secret values.
+```
+
 ## Chat-Only Onboarding (WhatsApp/Telegram/Discord)
 
 After install, run in chat:
 
 ```text
-/clawpilot setup
+/clawpilot install
 ```
+
+`/clawpilot setup` remains supported as an alias.
 
 The setup assistant now explains:
 
@@ -35,6 +53,11 @@ The setup assistant now explains:
 3. Step-by-step checks (Tailscale login, Funnel URL, bridge health, auth alignment).
 
 No terminal is required for the normal user path.
+
+Plugin-only limitation:
+
+1. First-install narration cannot be hard-enforced before plugin load.
+2. Post-install transparency is guaranteed once plugin is loaded via `/clawpilot install`.
 
 ## Configure Runtime (Required)
 
@@ -175,3 +198,5 @@ See `RELEASING.md` for full steps.
    verify plugin bridge URL points to a running bridge and Funnel health is green:
    `openclaw config get plugins.entries.clawpilot.config.bridgeBaseUrl`
    `curl -s https://<node>.ts.net/health`
+6. Installer replied "done" but commands fail:
+   run `/clawpilot install` in chat; it performs step-by-step recovery and remediation.

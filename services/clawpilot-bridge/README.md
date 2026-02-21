@@ -32,7 +32,7 @@ npm start
 ## Tailscale Funnel Enforcement
 
 - Install/reinstall/update is hard-blocked unless Funnel is correctly aligned to bridge.
-- End-user onboarding can run from chat via `/clawpilot setup` (no terminal required for normal path).
+- End-user onboarding can run from chat via `/clawpilot install` or `/clawpilot setup` (no terminal required for normal path).
 - Required checks:
   - local `GET /health` returns `200`
   - public `${WEBHOOK_BASE_URL}/health` returns `200` with expected bridge shape
@@ -48,11 +48,18 @@ Reinstall/update recovery:
 
 1. Rerun bootstrap:
    `../../scripts/bootstrap-recall.sh`
-2. Re-run QA preflight:
+2. In chat, run:
+   `/clawpilot install`
+3. Re-run QA preflight:
    `RUN_VPS_AUTH_CHECK=true npm run qa:quick-checks`
-3. Re-sync plugin token if needed:
+4. Re-sync plugin token if needed:
    `openclaw config set plugins.entries.clawpilot.config.bridgeToken "<BRIDGE_API_TOKEN>"`
    `openclaw daemon restart`
+
+Installer limitation:
+
+- First-install narration is best-effort with plugin-only changes (no OpenClaw core enforcement).
+- Once plugin is loaded, `/clawpilot install` guarantees transparent step-by-step setup output.
 
 ## Bridge API Auth (Recommended)
 

@@ -283,7 +283,7 @@ function parseConnectArgs(raw) {
   return { bridgeUrl, bridgeToken: bridgeToken.trim() };
 }
 
-function buildTailscalePrimerLines() {
+function buildTailscalePrimerLines(setupCommand = '/clawpilot setup') {
   return [
     'Why ClawPilot uses Tailscale Funnel:',
     '- It gives each user a private, stable HTTPS endpoint (`*.ts.net`) without opening random public ports.',
@@ -292,16 +292,36 @@ function buildTailscalePrimerLines() {
     'How to sign up for Tailscale:',
     `1) Create account: ${TAILSCALE_SIGNUP_URL}`,
     `2) Install app: ${TAILSCALE_DOWNLOAD_URL}`,
-    '3) Sign in once on this OpenClaw host, then rerun /clawpilot setup.',
+    `3) Sign in once on this OpenClaw host, then rerun ${setupCommand}.`,
   ];
 }
 
-async function runSetupAssistant(api) {
+function isInstallClassBridgeError(message) {
+  const text = String(message || '').toLowerCase();
+  if (!text) return false;
+  if (text.includes('bridge is unreachable')) return true;
+  if (text.includes('fetch failed')) return true;
+  if (text.includes('connection refused')) return true;
+  if (text.includes('econnrefused')) return true;
+  if (text.includes('enotfound')) return true;
+  if (text.includes('networkerror')) return true;
+  if (text.includes('401')) return true;
+  if (text.includes('unauthorized')) return true;
+  if (text.includes('authentication failed')) return true;
+  if (text.includes('bridgetoken')) return true;
+  return false;
+}
+
+async function runSetupAssistant(api, options = {}) {
+  const installMode = options.mode === 'install';
+  const setupCommand = installMode ? '/clawpilot install' : '/clawpilot setup';
   const lines = [
-    'ClawPilot setup assistant',
-    'I will show each onboarding step so you can see exactly what I am checking.',
+    installMode ? 'ClawPilot install finalizer' : 'ClawPilot setup assistant',
+    installMode
+      ? 'I will finalize post-install setup with transparent step-by-step checks.'
+      : 'I will show each onboarding step so you can see exactly what I am checking.',
     '',
-    ...buildTailscalePrimerLines(),
+    ...buildTailscalePrimerLines(setupCommand),
     '',
   ];
 
@@ -314,7 +334,7 @@ async function runSetupAssistant(api) {
     lines.push('');
     lines.push('Step 2/7: Tailscale CLI check -> FAILED');
     lines.push('I could not run `tailscale version` on this host.');
-    lines.push('Install/sign in to Tailscale, then rerun /clawpilot setup.');
+    lines.push(`Install/sign in to Tailscale, then rerun ${setupCommand}.`);
     lines.push(`Debug: ${tailOutput(tailscaleVersion.combined || tailscaleVersion.stderr || 'command not available')}`);
     return lines.join('\n');
   }
@@ -333,10 +353,10 @@ async function runSetupAssistant(api) {
     const tailscaleUp = await runSystemCommand(api, ['tailscale', 'up'], 30_000);
     const authUrl = extractFirstHttpUrl(tailscaleUp.combined);
     if (authUrl) {
-      lines.push(`Open this sign-in link, complete login, then rerun /clawpilot setup:\n${authUrl}`);
+      lines.push(`Open this sign-in link, complete login, then rerun ${setupCommand}:\n${authUrl}`);
     } else {
       lines.push('I could not auto-finish Tailscale login from chat.');
-      lines.push('Please open Tailscale app on this host and sign in, then rerun /clawpilot setup.');
+      lines.push(`Please open Tailscale app on this host and sign in, then rerun ${setupCommand}.`);
     }
     return lines.join('\n');
   }
@@ -363,7 +383,7 @@ async function runSetupAssistant(api) {
   if (!funnelUrl || !isHttpsTsNetUrl(funnelUrl)) {
     lines.push('Step 4/7: Funnel URL discovery -> FAILED');
     lines.push('I could not find a valid `https://*.ts.net` Funnel URL for this host.');
-    lines.push('Enable Funnel for bridge port 3001 in Tailscale, then rerun /clawpilot setup.');
+    lines.push(`Enable Funnel for bridge port 3001 in Tailscale, then rerun ${setupCommand}.`);
     return lines.join('\n');
   }
   lines.push(`Step 4/7: Funnel URL discovery -> OK (${funnelUrl})`);
@@ -373,7 +393,7 @@ async function runSetupAssistant(api) {
     lines.push('Step 5/7: Funnel -> bridge health check -> FAILED');
     lines.push(`Checked ${funnelHealth.url || `${funnelUrl}/health`} and did not get expected bridge health response.`);
     lines.push(`Reason: ${funnelHealth.reason || `HTTP ${funnelHealth.code}`}`);
-    lines.push('Start the bridge service, confirm Funnel points to port 3001, then rerun /clawpilot setup.');
+    lines.push(`Start the bridge service, confirm Funnel points to port 3001, then rerun ${setupCommand}.`);
     return lines.join('\n');
   }
   lines.push('Step 5/7: Funnel -> bridge health check -> OK');
@@ -658,8 +678,12 @@ function buildHelpText() {
     '/clawpilot help',
     '  Show available commands and examples.',
     '',
+    '/clawpilot install',
+    '  Post-install finalizer (recommended after plugin install/reinstall).',
+    '  Runs transparent step-by-step setup checks and remediation.',
+    '',
     '/clawpilot setup',
-    '  Chat-only onboarding assistant (checks Tailscale, Funnel, bridge reachability, and token alignment).',
+    '  Chat-only onboarding assistant (same checks as install finalizer).',
     '  Includes transparent step-by-step progress and signup guidance.',
     '',
     '/clawpilot connect <bridge_url> --token <BRIDGE_API_TOKEN>',
@@ -699,6 +723,7 @@ function buildHelpText() {
     '  Owner-only one-time reveal grant for shared mode.',
     '',
     'Examples:',
+    '/clawpilot install',
     '/clawpilot setup',
     '/clawpilot connect https://your-node.ts.net --token <BRIDGE_API_TOKEN>',
     '/clawpilot join https://meet.google.com/abc-defg-hij',
@@ -1006,13 +1031,13 @@ function buildBridgeUnauthorizedMessage(bridgeToken) {
     return [
       'Bridge authentication is enabled, but plugin bridgeToken is not configured.',
       'Set plugins.entries.clawpilot.config.bridgeToken to match BRIDGE_API_TOKEN, then restart OpenClaw daemon.',
-      'For chat-only onboarding, run /clawpilot setup or /clawpilot connect <bridge_url> --token <BRIDGE_API_TOKEN>.',
+      'For chat-only onboarding, run /clawpilot install or /clawpilot connect <bridge_url> --token <BRIDGE_API_TOKEN>.',
     ].join(' ');
   }
   return [
     'Bridge authentication failed (401): configured plugin bridgeToken was rejected.',
     'Re-sync plugins.entries.clawpilot.config.bridgeToken with BRIDGE_API_TOKEN (token may have rotated), then restart OpenClaw daemon.',
-    'For chat-only onboarding, run /clawpilot setup.',
+    'For chat-only onboarding, run /clawpilot install.',
   ].join(' ');
 }
 
@@ -1041,7 +1066,7 @@ async function callBridge(api, path, options = 'GET') {
   } catch (err) {
     const causeCode = err?.cause?.code ? ` (${err.cause.code})` : '';
     throw new Error(
-      `Bridge is unreachable at ${bridgeBaseUrl}${path}${causeCode}. Verify bridgeBaseUrl, ensure bridge service is running, and confirm Tailscale Funnel points to this bridge (/health). Run /clawpilot setup for guided chat onboarding.`
+      `Bridge is unreachable at ${bridgeBaseUrl}${path}${causeCode}. Verify bridgeBaseUrl, ensure bridge service is running, and confirm Tailscale Funnel points to this bridge (/health). Run /clawpilot install for guided chat onboarding.`
     );
   }
 
@@ -1147,7 +1172,7 @@ export default function register(api) {
 
   api.registerCommand({
     name: 'clawpilot',
-    description: 'Control ClawPilot: help | setup | connect | status | join | pause | resume | transcript | mode | audience | privacy | reveal',
+    description: 'Control ClawPilot: help | install | setup | connect | status | join | pause | resume | transcript | mode | audience | privacy | reveal',
     acceptsArgs: true,
     handler: async (ctx) => {
       const rawArgs = (ctx.args || '').trim();
@@ -1160,8 +1185,8 @@ export default function register(api) {
           return { text: buildHelpText() };
         }
 
-        if (action === 'setup') {
-          return { text: await runSetupAssistant(api) };
+        if (action === 'setup' || action === 'install') {
+          return { text: await runSetupAssistant(api, { mode: action === 'install' ? 'install' : 'setup' }) };
         }
 
         if (action === 'connect') {
@@ -1310,9 +1335,27 @@ export default function register(api) {
         };
       } catch (err) {
         const message = String(err?.message || err || 'unknown error');
+        if ((action === 'status' || action === 'join') && isInstallClassBridgeError(message)) {
+          try {
+            const recovery = await runSetupAssistant(api, { mode: 'install' });
+            return {
+              text: [
+                `ClawPilot command failed: ${message}`,
+                '',
+                'Running guided install recovery now:',
+                recovery,
+              ].join('\n'),
+            };
+          } catch (setupErr) {
+            const setupMessage = String(setupErr?.message || setupErr || 'unknown error');
+            return {
+              text: `ClawPilot command failed: ${message}\n\nInstall recovery failed: ${setupMessage}\nTry:\n/clawpilot install`,
+            };
+          }
+        }
         if (/bridge is unreachable|authentication failed|bridgeToken/i.test(message)) {
           return {
-            text: `ClawPilot command failed: ${message}\n\nTry chat-only onboarding:\n/clawpilot setup`,
+            text: `ClawPilot command failed: ${message}\n\nTry chat-only onboarding:\n/clawpilot install`,
           };
         }
         return { text: `ClawPilot command failed: ${message}` };
