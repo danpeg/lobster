@@ -37,10 +37,10 @@
 
   <rect x="404" y="150" width="390" height="360" rx="20" fill="url(#lobster)" filter="url(#shadow)"/>
   <text x="438" y="202" class="label">Lobster Bridge</text>
-  <text x="438" y="238" class="body">• /launch + /webhook</text>
-  <text x="438" y="270" class="body">• Live transcript reasoning</text>
-  <text x="438" y="302" class="body">• Privacy + audience controls</text>
-  <text x="438" y="334" class="body">• Auth + Funnel safeguards</text>
+  <text x="438" y="238" class="body">- /launch + /webhook</text>
+  <text x="438" y="270" class="body">- Live transcript reasoning</text>
+  <text x="438" y="302" class="body">- Privacy + audience controls</text>
+  <text x="438" y="334" class="body">- Auth + Funnel safeguards</text>
   <rect x="438" y="366" width="236" height="40" rx="20" fill="#FCD34D"/>
   <text x="455" y="392" class="chip">Real-time value, not after-the-fact</text>
 

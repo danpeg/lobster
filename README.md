@@ -1,206 +1,215 @@
-# ClawPilot
+# Lobster
 
-Let your OpenClaw join meetings and actively participate: do research, come up with ideas, create assets as you go.
+Meeting AI that participates, not just records.
 
-ClawPilot connects Recall.ai live transcripts to OpenClaw so your copilot can react in real time during meetings.
+<p align="center">
+  <a href="./AGENT_GUIDE.md"><img src="https://img.shields.io/badge/Agent%20Guide-Available-0EA5E9?style=for-the-badge" alt="Agent guide"></a>
+  <a href="./INSTALL_AGENT_PROTOCOL.md"><img src="https://img.shields.io/badge/Installer%20Protocol-Required-FF4500?style=for-the-badge" alt="Installer protocol"></a>
+  <a href="./SECURITY.md"><img src="https://img.shields.io/badge/Security-Documented-16A34A?style=for-the-badge" alt="Security"></a>
+  <a href="./CHANGELOG.md"><img src="https://img.shields.io/badge/Release%20Notes-Changelog-1D4ED8?style=for-the-badge" alt="Changelog"></a>
+</p>
 
-## Prerequisites
+Lobster extends your OpenClaw assistant into live meetings. It converts transcript flow into real-time suggestions, research, and action while conversations are still happening.
 
-1. OpenClaw installed and working
-2. OpenClaw model/channel auth already configured
-3. Node.js 18+ on the OpenClaw host
-4. Recall.ai account and API key
-5. Tailscale installed on the OpenClaw host
+Quick links: [Quickstart](#quickstart-tldr) | [Core Workflows](#core-workflows) | [Architecture](#architecture-at-a-glance) | [Agent Guide](./AGENT_GUIDE.md) | [Troubleshooting](#troubleshooting-fast-index)
 
-## Recommended Install Path
+![Lobster architecture](docs/assets/readme-architecture.svg)
+
+## Quickstart (TL;DR)
+
+Runtime assumptions:
+
+- OpenClaw is already installed and authenticated.
+- Node.js 18+ is available where the bridge runs.
+- Recall.ai API key is available.
+- Tailscale Funnel URL is available (`https://<node>.ts.net`).
+
+1. Install plugin and restart gateway:
 
 ```bash
-./scripts/chat-install-lobster.sh
+openclaw plugins install @lobster/lobster
+openclaw daemon restart
+openclaw plugins info lobster
 ```
 
-This script enforces strict installer narration phases:
-
-1. source check
-2. install plugin
-3. restart gateway
-4. verify plugin loaded
-5. run `/clawpilot install`
-6. final pass/fail
-
-Output format is always:
-
-`Step N/M: <action> -> <OK|FAILED>`
-
-Greedy internal recovery runs before any visible `FAILED`. On first visible failure, the script stops and prints remediation.
-
-AI installer protocol reference:
-
-1. `/Users/danpeguine/Projects/lobster/INSTALL_AGENT_PROTOCOL.md`
-
-Exact prompt snippet:
+2. In chat, run guided setup:
 
 ```text
-Install Lobster and narrate progress in chat using exactly:
-Step N/M: <action> -> <status>
-
-Required phases: source check, install plugin, restart gateway, verify loaded, run /clawpilot install, final pass/fail.
-On first failure: stop, mark FAILED, provide remediation, and do not continue.
-Never print secret values.
+/lobster install
 ```
 
-## Chat-Only Onboarding (WhatsApp/Telegram/Discord)
-
-After install, run in chat:
-
-```text
-/clawpilot install
-```
-
-`/clawpilot setup` is kept as an alias of `/clawpilot install`.
-
-The install finalizer is deterministic and greedy:
-
-1. bounded retries for Tailscale auth, Funnel discovery/enablement, and health checks
-2. bridge token auto-generation/sync when missing
-3. auth preflight validation (`401` unauth + `200` auth)
-4. explicit remediation when `RECALL_API_BASE` cannot be resolved
-
-No terminal is required for the normal user path.
-
-Installer limitation:
-
-1. First-install narration cannot be hard-enforced before plugin load.
-2. Post-install transparency is guaranteed once plugin is loaded via `/clawpilot install`.
-
-## Configure Runtime (Required)
-
-Bridge runtime is bundled in the plugin package and managed by plugin service lifecycle.
-
-Bootstrap your env file (region-aware; no hardcoded Recall region default):
+3. Bootstrap bridge runtime:
 
 ```bash
 ./scripts/bootstrap-recall.sh
+cd services/clawpilot-bridge
+set -a; source ./.env; set +a
+npm install
+npm start
 ```
 
-Required environment variables:
+4. Verify health:
 
-1. `RECALL_API_KEY`
-2. `RECALL_API_BASE` (match your Recall workspace region)
-3. `WEBHOOK_SECRET`
-4. `WEBHOOK_BASE_URL` (required `https://*.ts.net` for supported install/reinstall/update)
-5. `BRIDGE_API_TOKEN` (optional in env; plugin auto-generates/syncs if missing)
-
-Bootstrap and `/clawpilot install` both enforce Funnel alignment and bridge health.
-
-OpenClaw integration values are loaded from `openclaw.json`:
-
-6. `hooks.*` (for `/hooks/wake` + token)
-7. `channels.discord.botToken` (for direct Discord delivery)
-8. If bridge runs as a different OS user, set `OPENCLAW_CONFIG_PATH` to the correct `openclaw.json`
-
-Optional bridge behavior:
-
-9. `DISCORD_DIRECT_DELIVERY` (default: `true`)
-
-Routing is channel-agnostic by default (via OpenClaw hooks). Discord direct delivery is an optional adapter with fallback to OpenClaw hooks.
-
-Quick preflight checks:
-
-```bash
-./scripts/require-tailscale-funnel.sh
-./scripts/chat-install-lobster.sh
-RUN_VPS_AUTH_CHECK=true npm run qa:quick-checks
-```
-
-Private VPS deploy preflight flags (for `/Users/danpeguine/Projects/clawpilot-vps-cycle.sh`):
-
-1. `BRIDGE_TOKEN_ENV_FILE` (token source)
-2. `BRIDGE_WEBHOOK_ENV_FILE` (webhook/Funnel source; defaults to token env file)
-3. `BRIDGE_AUTH_PREFLIGHT` (`true` by default; validates 401 unauth + 200 auth)
-
-## Verify End-to-End
-
-1. Bridge health:
 ```bash
 curl -s http://127.0.0.1:3001/health
 ```
-2. Plugin loaded:
+
+## Why Lobster
+
+| Dimension | Lobster | Passive Meeting Recorders |
+| --- | --- | --- |
+| AI behavior | Participates during the meeting | Records and summarizes after |
+| Intelligence model | Your existing OpenClaw agent | Vendor-managed generic model |
+| Control | Your infrastructure and policies | SaaS-hosted defaults |
+| Timing of value | In the moment decisions are made | Delayed post-call notes |
+| Audience fit | AI-native builders and operators | Team-wide generic workflows |
+
+Core promise: while others record your meetings, Lobster participates in them.
+
+## Core Workflows
+
+### 1. Install and connect
+
+Chat-first path:
+
+```text
+/lobster install
+/lobster connect https://<node>.ts.net --token <BRIDGE_API_TOKEN>
+```
+
+Terminal preflight path:
+
 ```bash
-openclaw plugins info clawpilot
+./scripts/require-tailscale-funnel.sh
+RUN_VPS_AUTH_CHECK=true npm run qa:quick-checks
 ```
-3. In OpenClaw chat, run:
+
+### 2. Join and participate
+
 ```text
-/clawpilot help
+/lobster join https://meet.google.com/abc-defg-hij
+/lobster join https://meet.google.com/abc-defg-hij --name "Dan's Lobster"
+/lobster mode brainstorm
+/lobster audience private
+/lobster transcript on
 ```
-4. Launch a meeting bot directly from chat:
+
+### 3. Check runtime state
+
 ```text
-/clawpilot join https://meet.google.com/abc-defg-hij
+/lobster status
+/lobster privacy
+/lobster mode
 ```
-Optional custom name:
+
+### 4. Pause or recover
+
 ```text
-/clawpilot join https://meet.google.com/abc-defg-hij --name "Dan Note Taker"
+/lobster pause
+/lobster resume
+/lobster install
 ```
-Toggle transcript mirroring in active chat:
+
+![Lobster workflow](docs/assets/readme-workflow.png)
+
+## Architecture At A Glance
+
 ```text
-/clawpilot transcript on
-/clawpilot transcript off
+Meeting Platform -> Recall.ai events -> Lobster Bridge -> OpenClaw hooks -> Routed output
 ```
-Mode and privacy controls:
+
+Main components:
+
+1. Plugin package: `packages/clawpilot-plugin`
+2. Bridge service: `services/clawpilot-bridge`
+3. Prompt pack: `services/clawpilot-bridge/prompts/lobster.md`
+4. QA runbooks and templates: `qa/`
+
+Operational model:
+
+- Bridge ingests Recall webhook events.
+- Transcript context is interpreted with mode/privacy constraints.
+- Output is routed to OpenClaw hooks and channel adapters.
+- Commands remain the control surface for install, status, and join behavior.
+
+## Security and Control Defaults
+
+Required controls:
+
+1. Funnel alignment must pass (`https://*.ts.net` + matching bridge `/health`).
+2. `BRIDGE_API_TOKEN` should be enabled for protected bridge routes.
+3. Plugin token must match `BRIDGE_API_TOKEN`.
+4. Sensitive context is private-by-default and reveal-gated.
+
+Required env variables:
+
+- `RECALL_API_KEY`
+- `RECALL_API_BASE`
+- `WEBHOOK_SECRET`
+- `WEBHOOK_BASE_URL`
+- `BRIDGE_API_TOKEN`
+
+Recommended checks:
+
+```bash
+./scripts/require-tailscale-funnel.sh
+npm run security:scan
+npm run qa:quick-checks
+```
+
+## Troubleshooting Fast Index
+
+1. Plugin not available:
+
+```bash
+openclaw daemon restart
+openclaw plugins info lobster
+```
+
+2. Command fails with auth errors:
+
+```bash
+openclaw config set plugins.entries.lobster.config.bridgeToken "<BRIDGE_API_TOKEN>"
+openclaw daemon restart
+```
+
+3. Bridge unreachable:
+
+```bash
+openclaw config get plugins.entries.lobster.config.bridgeBaseUrl
+curl -s https://<node>.ts.net/health
+```
+
+4. Setup drift after reinstall/update:
+
 ```text
-/clawpilot mode
-/clawpilot mode brainstorm
-/clawpilot audience private
-/clawpilot audience shared
-/clawpilot privacy
-/clawpilot reveal context
+/lobster install
 ```
-5. Confirm transcripts trigger copilot responses.
 
-## Components
+## Human Path vs Agent Path
 
-1. `packages/clawpilot-plugin`: npm-installable OpenClaw plugin (`/clawpilot` command + managed bridge service)
-2. `packages/clawpilot-plugin/bridge-runtime`: bundled bridge runtime shipped inside plugin artifact
-3. `services/clawpilot-bridge`: source bridge implementation and ops docs
-4. `services/clawpilot-bridge/prompts/lobster.md`: editable meeting copilot prompt pack
+Human-first docs:
 
-## Security Notes
+- This README: `README.md`
+- Setup narrative protocol: `INSTALL_AGENT_PROTOCOL.md`
+- Bridge operational detail: `services/clawpilot-bridge/README.md`
 
-1. Installer/finalizer output redacts token/API secret values.
-2. Plugin-managed runtime can read required process env (`RECALL_API_KEY`, `RECALL_API_BASE`, `WEBHOOK_SECRET`) without printing values.
-3. Non-private bridge hosts are blocked by default unless `allowRemoteBridge` is explicitly enabled.
-4. `/launch` responses are sanitized and do not return webhook URLs or tokens.
+Agent-first contract:
 
-## Branches
+- Deterministic machine spec: `AGENT_GUIDE.md`
 
-1. `main`: stable release path
-2. `experimental`: active development, includes Notion and Google Docs integrations
+## Repository Map
 
-## Release
+- `packages/clawpilot-plugin`: Lobster plugin package.
+- `services/clawpilot-bridge`: bridge receiver and routing service.
+- `scripts/`: bootstrap, security, and QA automation.
+- `qa/`: manual test plans, templates, and run artifacts.
 
-1. Develop on `experimental`
-2. Merge curated changes to `main`
-3. Run checks:
-   - `npm run security:scan`
-   - `npm run check:plugin-pack`
-4. Publish plugin package from `packages/clawpilot-plugin`
+## Release Notes and Contribution
 
-See `RELEASING.md` for full steps.
+- Contribution guide: `CONTRIBUTING.md`
+- Changelog: `CHANGELOG.md`
+- Security policy: `SECURITY.md`
+- Releasing process: `RELEASING.md`
 
-## Troubleshooting
-
-1. `plugin not found`:
-   restart OpenClaw daemon and run `openclaw plugins doctor`
-2. No copilot reaction:
-   verify bridge `.env` values and check bridge logs
-3. Recall webhook failures:
-   confirm `WEBHOOK_BASE_URL` is `https://*.ts.net` and run `./scripts/require-tailscale-funnel.sh`
-4. Reinstall/update followed by 401 errors:
-   re-sync plugin token and restart daemon
-   `openclaw config set plugins.entries.clawpilot.config.bridgeToken "<BRIDGE_API_TOKEN>"`
-   `openclaw daemon restart`
-5. `ClawPilot command failed: fetch failed`:
-   verify plugin bridge URL points to a running bridge and Funnel health is green:
-   `openclaw config get plugins.entries.clawpilot.config.bridgeBaseUrl`
-   `curl -s https://<node>.ts.net/health`
-6. Installer replied "done" but commands fail:
-   run `/clawpilot install` in chat; it performs step-by-step recovery and remediation.
+Lobster is built for builders who want AI that acts inside meetings, under their control.
