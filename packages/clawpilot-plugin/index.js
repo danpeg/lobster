@@ -22,6 +22,7 @@ const LEGACY_PLUGIN_CONFIG_KEYS = [
   'teamAgent',
   'autoJoinMeetingLinks',
   'autoJoinReplaceActive',
+  'manualJoinReplaceActive',
   'blockLegacyMeetingLaunchScripts',
   'agentName',
 ];
@@ -94,6 +95,7 @@ function loadBridgeConfig(api) {
   const teamAgent = Boolean(pluginCfg.teamAgent);
   const autoJoinMeetingLinks = pluginCfg.autoJoinMeetingLinks !== false;
   const autoJoinReplaceActive = Boolean(pluginCfg.autoJoinReplaceActive);
+  const manualJoinReplaceActive = pluginCfg.manualJoinReplaceActive !== false;
   const blockLegacyMeetingLaunchScripts = pluginCfg.blockLegacyMeetingLaunchScripts !== false;
   return {
     bridgeBaseUrl,
@@ -101,6 +103,7 @@ function loadBridgeConfig(api) {
     teamAgent,
     autoJoinMeetingLinks,
     autoJoinReplaceActive,
+    manualJoinReplaceActive,
     blockLegacyMeetingLaunchScripts,
   };
 }
@@ -752,7 +755,7 @@ function buildHelpText() {
     '/clawpilot setup',
     '/clawpilot connect https://your-node.ts.net --token <BRIDGE_API_TOKEN>',
     '/clawpilot join https://meet.google.com/abc-defg-hij',
-    '/clawpilot join https://meet.google.com/abc-defg-hij --name "Sunny Note Taker"',
+    '/clawpilot join https://meet.google.com/abc-defg-hij --name "Custom Bot Name"',
     '/clawpilot transcript on',
     '/clawpilot mode brainstorm',
     '/clawpilot audience shared',
@@ -778,6 +781,11 @@ function formatJoinSummary(result) {
 
   if (typeof result?.join_at === 'string' && result.join_at.trim()) {
     lines.push(`Join time: ${result.join_at.trim()}`);
+  }
+
+  const status = sanitizeAgentName(result?.status || result?.state);
+  if (status) {
+    lines.push(`Status: ${status}`);
   }
 
   lines.push('Admit the bot in the meeting when prompted.');
@@ -1243,7 +1251,7 @@ export default function register(api) {
           const routeTarget = buildRouteTarget(ctx);
           rememberHumanFirstName(ctx, null, routeTarget);
           const ownerBinding = buildOwnerBinding(ctx);
-          const { teamAgent } = loadBridgeConfig(api);
+          const { teamAgent, manualJoinReplaceActive } = loadBridgeConfig(api);
           if (routeTarget) {
             console.log(`[ClawPilot] route_target resolved ${JSON.stringify(routeTarget)}`);
           } else {
@@ -1252,6 +1260,7 @@ export default function register(api) {
           if (routeTarget) payload.route_target = routeTarget;
           if (ownerBinding) payload.owner_binding = ownerBinding;
           payload.team_agent = teamAgent;
+          payload.replace_active = manualJoinReplaceActive;
           if (parsed.botName) payload.bot_name = parsed.botName;
           if (!parsed.botName) {
             const defaultLobsterName = inferDefaultLobsterName(ctx, null, routeTarget);
