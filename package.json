@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "scripts": {
     "security:scan": "bash ./scripts/scan-secrets.sh",
-    "check:plugin-pack": "cd packages/clawpilot-plugin && npm pack --dry-run",
+    "check:plugin-pack": "bash -lc 'set -euo pipefail; log=$(mktemp); cd packages/clawpilot-plugin; npm pack --dry-run 2>&1 | tee \"$log\"; grep -q \"bridge-runtime/server.js\" \"$log\"'",
     "qa:init-run": "bash ./scripts/qa-init-run.sh",
     "qa:quick-checks": "bash ./scripts/qa-quick-checks.sh",
     "audit:sensitive:baseline": "bash ./scripts/audit-sensitive-data.sh baseline",

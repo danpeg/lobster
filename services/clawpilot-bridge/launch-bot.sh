@@ -11,7 +11,7 @@ fi
 
 RAW_INPUT="${*:-}"
 DRY_RUN="${DRY_RUN:-false}"
-RECALL_API_BASE="${RECALL_API_BASE:-https://eu-central-1.recall.ai}"
+RECALL_API_BASE="${RECALL_API_BASE:-}"
 RECALL_API_BASE="${RECALL_API_BASE%/}"
 RECALL_BOT_API="${RECALL_API_BASE}/api/v1/bot"
 RECALL_STT_MODE="${RECALL_STT_MODE:-prioritize_low_latency}"
@@ -155,6 +155,12 @@ fi
 
 if [[ -z "${RECALL_API_KEY:-}" ]]; then
   echo "Error: RECALL_API_KEY is not set (export it or define it in ${ENV_FILE})"
+  exit 1
+fi
+
+if [[ -z "${RECALL_API_BASE:-}" ]]; then
+  echo "Error: RECALL_API_BASE is not set (export it or define it in ${ENV_FILE})"
+  echo "Set it to your workspace region endpoint (for example: https://us-east-1.recall.ai)"
   exit 1
 fi
 

@@ -14,6 +14,38 @@
         "type": "string",
         "description": "Optional bearer token for bridge control endpoints"
       },
+      "recallApiBase": {
+        "type": "string",
+        "description": "Recall API region endpoint (for example: https://us-east-1.recall.ai)."
+      },
+      "managedBridgeEnabled": {
+        "type": "boolean",
+        "description": "Run bundled bridge runtime as a plugin-managed service."
+      },
+      "managedBridgeHost": {
+        "type": "string",
+        "description": "Host/interface for bundled bridge runtime."
+      },
+      "managedBridgePort": {
+        "type": "number",
+        "description": "Port for bundled bridge runtime."
+      },
+      "managedBridgeHealthTimeoutMs": {
+        "type": "number",
+        "description": "Timeout for managed bridge startup health readiness."
+      },
+      "managedBridgeStopTimeoutMs": {
+        "type": "number",
+        "description": "Timeout before force-kill during managed bridge shutdown."
+      },
+      "installRecoveryMaxAttempts": {
+        "type": "number",
+        "description": "Bounded retry attempts for greedy install recovery."
+      },
+      "installRecoveryBackoffMs": {
+        "type": "number",
+        "description": "Delay between greedy recovery attempts."
+      },
       "agentName": {
         "type": "string",
         "description": "Optional agent name used for default bot naming"
@@ -48,6 +80,38 @@
     "bridgeToken": {
       "label": "Bridge Token",
       "help": "Optional bearer token if your bridge requires auth"
+    },
+    "recallApiBase": {
+      "label": "Recall API Base",
+      "help": "Region endpoint for your Recall workspace (required)."
+    },
+    "managedBridgeEnabled": {
+      "label": "Managed Bridge Service",
+      "help": "On by default. Plugin starts/stops bundled bridge runtime with daemon lifecycle."
+    },
+    "managedBridgeHost": {
+      "label": "Managed Bridge Host",
+      "help": "Default 127.0.0.1."
+    },
+    "managedBridgePort": {
+      "label": "Managed Bridge Port",
+      "help": "Default 3001."
+    },
+    "managedBridgeHealthTimeoutMs": {
+      "label": "Bridge Start Timeout (ms)",
+      "help": "How long startup health wait can run before failing."
+    },
+    "managedBridgeStopTimeoutMs": {
+      "label": "Bridge Stop Timeout (ms)",
+      "help": "How long graceful stop waits before force kill."
+    },
+    "installRecoveryMaxAttempts": {
+      "label": "Install Retry Attempts",
+      "help": "Bounded greedy retries before a visible FAILED step."
+    },
+    "installRecoveryBackoffMs": {
+      "label": "Install Retry Backoff (ms)",
+      "help": "Delay between retries in greedy recovery."
     },
     "agentName": {
       "label": "Agent Name",

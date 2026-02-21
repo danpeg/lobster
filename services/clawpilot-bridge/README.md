@@ -1,6 +1,9 @@
-# Recall Bridge Service
+# Recall Bridge Service (Source Runtime)
 
 Express service that receives Recall.ai webhook events and forwards transcript-driven copilot prompts into OpenClaw via `/hooks/wake`.
+
+Primary deployment model now: plugin-managed service from bundled runtime (`packages/clawpilot-plugin/bridge-runtime`).
+This directory remains the source runtime and operational reference for local/dev workflows.
 
 ## Features
 
@@ -22,17 +25,19 @@ npm install
 npm start
 ```
 
+Managed-service users normally do not run this directory directly; `/clawpilot install` starts and verifies the bundled runtime.
+
 ## Required Environment Variables
 
 - `RECALL_API_KEY`
-- `RECALL_API_BASE` (region endpoint, e.g. `https://us-east-1.recall.ai` or `https://eu-central-1.recall.ai`)
+- `RECALL_API_BASE` (required region endpoint, e.g. `https://us-east-1.recall.ai` or `https://eu-central-1.recall.ai`)
 - `WEBHOOK_SECRET`
 - `WEBHOOK_BASE_URL` (required `https://*.ts.net` for supported install/reinstall/update)
 
 ## Tailscale Funnel Enforcement
 
 - Install/reinstall/update is hard-blocked unless Funnel is correctly aligned to bridge.
-- End-user onboarding can run from chat via `/clawpilot install` or `/clawpilot setup` (no terminal required for normal path).
+- End-user onboarding runs from chat via `/clawpilot install` (or `/clawpilot setup` alias).
 - Required checks:
   - local `GET /health` returns `200`
   - public `${WEBHOOK_BASE_URL}/health` returns `200` with expected bridge shape
@@ -56,10 +61,10 @@ Reinstall/update recovery:
    `openclaw config set plugins.entries.clawpilot.config.bridgeToken "<BRIDGE_API_TOKEN>"`
    `openclaw daemon restart`
 
-Installer limitation:
+Installer behavior:
 
-- First-install narration is best-effort with plugin-only changes (no OpenClaw core enforcement).
-- Once plugin is loaded, `/clawpilot install` guarantees transparent step-by-step setup output.
+- First-install phase narration is enforced by `scripts/chat-install-lobster.sh`.
+- Once plugin is loaded, `/clawpilot install` runs deterministic greedy recovery with bounded retries.
 
 ## Bridge API Auth (Recommended)
 
@@ -87,6 +92,7 @@ Protected routes when `BRIDGE_API_TOKEN` is set:
 Migration note:
 
 - If `/clawpilot` commands start returning `401`, set plugin config `bridgeToken` to match `BRIDGE_API_TOKEN`.
+- Current installer/finalizer can auto-generate/sync bridge token when missing.
 - If `/clawpilot` commands return network errors, verify plugin `bridgeBaseUrl` and Funnel `/health` connectivity.
 
 ## launch-bot.sh behavior

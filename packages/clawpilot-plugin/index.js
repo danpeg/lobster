@@ -1,11 +1,52 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
 const PLUGIN_ID = 'clawpilot';
-const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:3001';
-const DEFAULT_BRIDGE_PORT = '3001';
+const DEFAULT_BRIDGE_HOST = '127.0.0.1';
+const DEFAULT_BRIDGE_PORT = 3001;
+const DEFAULT_BRIDGE_URL = `http://${DEFAULT_BRIDGE_HOST}:${DEFAULT_BRIDGE_PORT}`;
+const DEFAULT_MANAGED_HEALTH_TIMEOUT_MS = 25_000;
+const DEFAULT_MANAGED_STOP_TIMEOUT_MS = 7_000;
+const DEFAULT_INSTALL_RECOVERY_MAX_ATTEMPTS = 3;
+const DEFAULT_INSTALL_RECOVERY_BACKOFF_MS = 1_200;
+const BRIDGE_HEALTH_POLL_MS = 900;
+const BRIDGE_RUNTIME_ID = 'clawpilot-bridge';
+const MANAGED_STATE_DIR_NAME = 'clawpilot';
+const MANAGED_STATE_FILE_NAME = 'managed-bridge-state.json';
+const MANAGED_BRIDGE_STATE_FILE_NAME = 'bridge-session-state.json';
 const TAILSCALE_SIGNUP_URL = 'https://tailscale.com/';
 const TAILSCALE_DOWNLOAD_URL = 'https://tailscale.com/download';
+const TAILSCALE_CANDIDATES = [
+  'tailscale',
+  '/Applications/Tailscale.app/Contents/MacOS/Tailscale',
+  '/opt/homebrew/bin/tailscale',
+  '/usr/local/bin/tailscale',
+];
+const RECALL_API_BASE_CANDIDATES = [
+  'https://us-east-1.recall.ai',
+  'https://eu-central-1.recall.ai',
+  'https://us-west-2.recall.ai',
+  'https://ap-southeast-1.recall.ai',
+];
+const CLAWPILOT_COMMAND_ALIASES = ['clawpiolt', 'clawpilto', 'clawpliot', 'clawpilo', 'clwpilot'];
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const BRIDGE_RUNTIME_DIR = path.join(__dirname, 'bridge-runtime');
+const BRIDGE_RUNTIME_ENTRY = path.join(BRIDGE_RUNTIME_DIR, 'server.js');
+const BRIDGE_RUNTIME_PROMPT_PATH = path.join(BRIDGE_RUNTIME_DIR, 'prompts', 'lobster.md');
 const HUMAN_FIRST_NAME_BY_ROUTE = new Map();
 const AUTO_JOIN_REPLY_BY_ROUTE = new Map();
 const AUTO_JOIN_REPLY_TTL_MS = 8_000;
+const MANAGED_BRIDGE_RUNTIME = {
+  serviceContext: null,
+  child: null,
+  healthUrl: DEFAULT_BRIDGE_URL,
+};
 const LEGACY_MEETING_LAUNCH_BLOCK_REASON =
   'Meeting launch is managed by ClawPilot plugin/bridge. Use /clawpilot join or paste URL.';
 const LEGACY_MEETING_LAUNCH_PATTERNS = [
@@ -18,6 +59,14 @@ const LEGACY_MEETING_LAUNCH_PATTERNS = [
 const LEGACY_PLUGIN_CONFIG_KEYS = [
   'bridgeBaseUrl',
   'bridgeToken',
+  'recallApiBase',
+  'managedBridgeEnabled',
+  'managedBridgeHost',
+  'managedBridgePort',
+  'managedBridgeHealthTimeoutMs',
+  'managedBridgeStopTimeoutMs',
+  'installRecoveryMaxAttempts',
+  'installRecoveryBackoffMs',
   'allowRemoteBridge',
   'teamAgent',
   'autoJoinMeetingLinks',
@@ -41,6 +90,27 @@ function pickFirstNonEmptyString(candidates) {
     if (candidate) return candidate;
   }
   return '';
+}
+
+function toPositiveInteger(value, fallback, min = 1, max = 300_000) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  const normalized = Math.round(num);
+  if (normalized < min) return fallback;
+  if (normalized > max) return max;
+  return normalized;
+}
+
+function normalizeRecallApiBase(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== 'https:') return '';
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`.replace(/\/$/, '');
+  } catch {
+    return '';
+  }
 }
 
 function isPrivateIpv4(hostname) {
@@ -89,9 +159,38 @@ function loadBridgeConfig(api) {
   const pluginEntry = cloneObject(cfg?.plugins?.entries?.[PLUGIN_ID]);
   const { legacyConfig } = splitPluginEntryAndLegacyConfig(pluginEntry);
   const pluginCfg = { ...legacyConfig, ...cloneObject(pluginEntry.config) };
+  const managedBridgeHost = String(pluginCfg.managedBridgeHost || DEFAULT_BRIDGE_HOST).trim() || DEFAULT_BRIDGE_HOST;
+  const managedBridgePort = toPositiveInteger(pluginCfg.managedBridgePort, DEFAULT_BRIDGE_PORT, 1, 65535);
+  const managedBridgeEnabled = pluginCfg.managedBridgeEnabled !== false;
+  const managedBridgeHealthTimeoutMs = toPositiveInteger(
+    pluginCfg.managedBridgeHealthTimeoutMs,
+    DEFAULT_MANAGED_HEALTH_TIMEOUT_MS,
+    2_000,
+    120_000,
+  );
+  const managedBridgeStopTimeoutMs = toPositiveInteger(
+    pluginCfg.managedBridgeStopTimeoutMs,
+    DEFAULT_MANAGED_STOP_TIMEOUT_MS,
+    1_000,
+    60_000,
+  );
+  const installRecoveryMaxAttempts = toPositiveInteger(
+    pluginCfg.installRecoveryMaxAttempts,
+    DEFAULT_INSTALL_RECOVERY_MAX_ATTEMPTS,
+    1,
+    6,
+  );
+  const installRecoveryBackoffMs = toPositiveInteger(
+    pluginCfg.installRecoveryBackoffMs,
+    DEFAULT_INSTALL_RECOVERY_BACKOFF_MS,
+    100,
+    15_000,
+  );
+  const localManagedBridgeUrl = `http://${managedBridgeHost}:${managedBridgePort}`;
   const allowRemoteBridge = Boolean(pluginCfg.allowRemoteBridge);
-  const bridgeBaseUrl = normalizeBridgeBaseUrl(pluginCfg.bridgeBaseUrl || DEFAULT_BRIDGE_URL, allowRemoteBridge);
+  const bridgeBaseUrl = normalizeBridgeBaseUrl(pluginCfg.bridgeBaseUrl || localManagedBridgeUrl, allowRemoteBridge);
   const bridgeToken = pluginCfg.bridgeToken || '';
+  const recallApiBase = normalizeRecallApiBase(pluginCfg.recallApiBase);
   const teamAgent = Boolean(pluginCfg.teamAgent);
   const autoJoinMeetingLinks = pluginCfg.autoJoinMeetingLinks !== false;
   const autoJoinReplaceActive = Boolean(pluginCfg.autoJoinReplaceActive);
@@ -100,6 +199,14 @@ function loadBridgeConfig(api) {
   return {
     bridgeBaseUrl,
     bridgeToken,
+    recallApiBase,
+    managedBridgeEnabled,
+    managedBridgeHost,
+    managedBridgePort,
+    managedBridgeHealthTimeoutMs,
+    managedBridgeStopTimeoutMs,
+    installRecoveryMaxAttempts,
+    installRecoveryBackoffMs,
     teamAgent,
     autoJoinMeetingLinks,
     autoJoinReplaceActive,
@@ -122,6 +229,15 @@ function isHttpsTsNetUrl(value) {
   try {
     const parsed = new URL(value);
     return parsed.protocol === 'https:' && parsed.hostname.endsWith('.ts.net');
+  } catch {
+    return false;
+  }
+}
+
+function isLoopbackBridgeBaseUrl(value) {
+  try {
+    const parsed = new URL(value);
+    return parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost' || parsed.hostname === '::1';
   } catch {
     return false;
   }
@@ -187,6 +303,330 @@ async function runSystemCommand(api, argv, timeoutMs = 10_000) {
     const message = tailOutput(err?.message || err);
     return { ok: false, code: null, stdout: '', stderr: message, combined: message };
   }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function redactSensitiveText(value) {
+  const text = String(value || '');
+  if (!text) return '';
+  return text
+    .replace(/Bearer\s+[A-Za-z0-9._\-+/=]+/gi, 'Bearer ***redacted***')
+    .replace(/(BRIDGE_API_TOKEN=)[^\s"'`]+/gi, '$1***redacted***')
+    .replace(/(RECALL_API_KEY=)[^\s"'`]+/gi, '$1***redacted***')
+    .replace(/(WEBHOOK_SECRET=)[^\s"'`]+/gi, '$1***redacted***');
+}
+
+function getManagedStateRootDir() {
+  const stateDir = MANAGED_BRIDGE_RUNTIME.serviceContext?.stateDir || path.join(os.homedir(), '.openclaw', 'state');
+  return path.join(stateDir, MANAGED_STATE_DIR_NAME);
+}
+
+function getManagedStateFilePath() {
+  return path.join(getManagedStateRootDir(), MANAGED_STATE_FILE_NAME);
+}
+
+function getManagedBridgeStateFilePath() {
+  return path.join(getManagedStateRootDir(), MANAGED_BRIDGE_STATE_FILE_NAME);
+}
+
+function sanitizeManagedState(value) {
+  const input = value && typeof value === 'object' ? value : {};
+  return {
+    bridgeToken: String(input.bridgeToken || '').trim(),
+    recallApiBase: normalizeRecallApiBase(input.recallApiBase),
+    bridgePid: Number.isFinite(Number(input.bridgePid)) ? Number(input.bridgePid) : 0,
+    bridgeBaseUrl: normalizeUrlNoTrailingSlash(String(input.bridgeBaseUrl || '')),
+    updatedAt: String(input.updatedAt || '').trim(),
+  };
+}
+
+async function readManagedState() {
+  const filePath = getManagedStateFilePath();
+  try {
+    const raw = await fsp.readFile(filePath, 'utf8');
+    return sanitizeManagedState(tryParseJson(raw) || {});
+  } catch {
+    return sanitizeManagedState({});
+  }
+}
+
+async function writeManagedState(nextState) {
+  const root = getManagedStateRootDir();
+  const filePath = getManagedStateFilePath();
+  await fsp.mkdir(root, { recursive: true });
+  const payload = sanitizeManagedState({
+    ...nextState,
+    updatedAt: new Date().toISOString(),
+  });
+  await fsp.writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  return payload;
+}
+
+function generateSecureBridgeToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function isPidRunning(pid) {
+  const numericPid = Number(pid);
+  if (!Number.isFinite(numericPid) || numericPid <= 0) return false;
+  try {
+    process.kill(numericPid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function stopPidGracefully(pid, timeoutMs = DEFAULT_MANAGED_STOP_TIMEOUT_MS) {
+  const numericPid = Number(pid);
+  if (!Number.isFinite(numericPid) || numericPid <= 0) return;
+  if (!isPidRunning(numericPid)) return;
+  try {
+    process.kill(numericPid, 'SIGTERM');
+  } catch {}
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isPidRunning(numericPid)) return;
+    await sleep(200);
+  }
+  try {
+    process.kill(numericPid, 'SIGKILL');
+  } catch {}
+}
+
+async function ensureBridgeHealthReady(baseUrl, timeoutMs = DEFAULT_MANAGED_HEALTH_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
+  let lastProbe = { ok: false, reason: 'not started', code: 0, url: '' };
+  while (Date.now() < deadline) {
+    lastProbe = await probeBridgeHealth(baseUrl);
+    if (lastProbe.ok) return { ok: true, probe: lastProbe };
+    await sleep(BRIDGE_HEALTH_POLL_MS);
+  }
+  return { ok: false, probe: lastProbe };
+}
+
+async function readEnvValue(api, key) {
+  const direct = String(process.env[key] || '').trim();
+  if (direct) return direct;
+  const result = await runSystemCommand(api, ['printenv', key]);
+  if (!result.ok) return '';
+  return String(result.stdout || '').trim();
+}
+
+async function probeRecallApiBase(baseUrl) {
+  const normalized = normalizeRecallApiBase(baseUrl);
+  if (!normalized) return { ok: false, code: 0 };
+  try {
+    const res = await fetchWithTimeout(`${normalized}/api/v1/bot?page_size=1`, { method: 'GET' }, 6_000);
+    const code = Number(res.status || 0);
+    await res.text();
+    return { ok: code === 200 || code === 401 || code === 403, code };
+  } catch {
+    return { ok: false, code: 0 };
+  }
+}
+
+async function resolveRecallApiBase(api, cfg, options = {}) {
+  const managedState = await readManagedState();
+  const configCandidate = normalizeRecallApiBase(cfg?.recallApiBase);
+  if (configCandidate) return { ok: true, base: configCandidate, source: 'plugin config' };
+
+  const stateCandidate = normalizeRecallApiBase(options.stateOverride || managedState.recallApiBase);
+  if (stateCandidate) return { ok: true, base: stateCandidate, source: 'managed state' };
+
+  const envCandidate = normalizeRecallApiBase(await readEnvValue(api, 'RECALL_API_BASE'));
+  if (envCandidate) return { ok: true, base: envCandidate, source: 'environment' };
+
+  if (options.skipProbe) {
+    return { ok: false, base: '', source: '', reason: 'missing RECALL_API_BASE in config/state/env' };
+  }
+
+  const successful = [];
+  for (const candidate of RECALL_API_BASE_CANDIDATES) {
+    const probe = await probeRecallApiBase(candidate);
+    if (probe.ok) {
+      successful.push(candidate);
+    }
+  }
+
+  if (successful.length === 1) {
+    return { ok: true, base: successful[0], source: 'region probe' };
+  }
+  if (successful.length > 1) {
+    return {
+      ok: false,
+      base: '',
+      source: '',
+      reason: 'multiple Recall regions responded; set RECALL_API_BASE explicitly to your workspace region',
+    };
+  }
+  return {
+    ok: false,
+    base: '',
+    source: '',
+    reason: 'no Recall region endpoint responded; set RECALL_API_BASE explicitly',
+  };
+}
+
+async function resolveTailscaleBinary(api) {
+  for (const candidate of TAILSCALE_CANDIDATES) {
+    if (candidate.startsWith('/') && !fs.existsSync(candidate)) continue;
+    const result = await runSystemCommand(api, [candidate, 'version'], 8_000);
+    if (result.ok) return { ok: true, bin: candidate };
+  }
+  return { ok: false, bin: '', reason: 'tailscale binary not found in PATH, app bundle, or Homebrew paths' };
+}
+
+async function runTailscale(api, tailscaleBin, args, timeoutMs = 12_000) {
+  return runSystemCommand(api, [tailscaleBin, ...args], timeoutMs);
+}
+
+async function discoverFunnelUrl(api, tailscaleBin) {
+  const statusJson = await runTailscale(api, tailscaleBin, ['funnel', 'status', '--json']);
+  if (statusJson.ok) {
+    const parsed = tryParseJson(statusJson.stdout);
+    const fromJson = findFirstTsNetUrl(parsed);
+    if (fromJson) return fromJson;
+    const fromText = findFirstTsNetUrl(statusJson.combined);
+    if (fromText) return fromText;
+  }
+  const statusText = await runTailscale(api, tailscaleBin, ['funnel', 'status']);
+  if (statusText.ok) {
+    const fromText = findFirstTsNetUrl(statusText.combined);
+    if (fromText) return fromText;
+  }
+  return '';
+}
+
+async function syncPluginBridgeToken(api, token) {
+  const cleanToken = String(token || '').trim();
+  if (!cleanToken) return '';
+  const current = loadBridgeConfig(api);
+  if (current.bridgeToken === cleanToken) return cleanToken;
+  await updateClawpilotPluginConfig(api, { bridgeToken: cleanToken });
+  return cleanToken;
+}
+
+async function ensureBridgeToken(api) {
+  const cfg = loadBridgeConfig(api);
+  if (cfg.bridgeToken) {
+    const state = await writeManagedState({ ...(await readManagedState()), bridgeToken: cfg.bridgeToken });
+    return state.bridgeToken;
+  }
+  const state = await readManagedState();
+  if (state.bridgeToken) {
+    await syncPluginBridgeToken(api, state.bridgeToken);
+    return state.bridgeToken;
+  }
+  const generated = generateSecureBridgeToken();
+  await writeManagedState({ ...state, bridgeToken: generated });
+  await syncPluginBridgeToken(api, generated);
+  return generated;
+}
+
+async function stopManagedBridgeRuntime(api, cfg) {
+  if (MANAGED_BRIDGE_RUNTIME.child && !MANAGED_BRIDGE_RUNTIME.child.killed) {
+    const child = MANAGED_BRIDGE_RUNTIME.child;
+    child.removeAllListeners('exit');
+    try {
+      child.kill('SIGTERM');
+    } catch {}
+    const deadline = Date.now() + cfg.managedBridgeStopTimeoutMs;
+    while (Date.now() < deadline) {
+      if (child.exitCode !== null) break;
+      await sleep(150);
+    }
+    if (child.exitCode === null) {
+      try {
+        child.kill('SIGKILL');
+      } catch {}
+    }
+    MANAGED_BRIDGE_RUNTIME.child = null;
+  }
+
+  const state = await readManagedState();
+  if (state.bridgePid && isPidRunning(state.bridgePid)) {
+    await stopPidGracefully(state.bridgePid, cfg.managedBridgeStopTimeoutMs);
+  }
+  await writeManagedState({ ...state, bridgePid: 0 });
+  api.logger.info('[ClawPilot] managed bridge stopped');
+}
+
+async function startManagedBridgeRuntime(api, cfg) {
+  const state = await readManagedState();
+  if (state.bridgePid && isPidRunning(state.bridgePid)) {
+    await stopPidGracefully(state.bridgePid, cfg.managedBridgeStopTimeoutMs);
+  }
+  if (!fs.existsSync(BRIDGE_RUNTIME_ENTRY)) {
+    throw new Error(`Bundled bridge runtime is missing: ${BRIDGE_RUNTIME_ENTRY}`);
+  }
+
+  const recallResolution = await resolveRecallApiBase(api, cfg);
+  const bridgeToken = await ensureBridgeToken(api);
+  const localBaseUrl = `http://${cfg.managedBridgeHost}:${cfg.managedBridgePort}`;
+  const env = {
+    ...process.env,
+    HOST: cfg.managedBridgeHost,
+    PORT: String(cfg.managedBridgePort),
+    BRIDGE_API_TOKEN: bridgeToken,
+    BRIDGE_STATE_FILE: getManagedBridgeStateFilePath(),
+    LOBSTER_PROMPT_PATH: BRIDGE_RUNTIME_PROMPT_PATH,
+  };
+  if (recallResolution.ok) {
+    env.RECALL_API_BASE = recallResolution.base;
+  }
+
+  const child = spawn(process.execPath, [BRIDGE_RUNTIME_ENTRY], {
+    cwd: BRIDGE_RUNTIME_DIR,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  child.stdout?.on('data', (chunk) => {
+    const line = redactSensitiveText(String(chunk || '').trim());
+    if (line) api.logger.info(`[ClawPilotBridge] ${line.slice(0, 600)}`);
+  });
+  child.stderr?.on('data', (chunk) => {
+    const line = redactSensitiveText(String(chunk || '').trim());
+    if (line) api.logger.warn(`[ClawPilotBridge] ${line.slice(0, 600)}`);
+  });
+  child.on('exit', async () => {
+    MANAGED_BRIDGE_RUNTIME.child = null;
+    const nextState = await readManagedState();
+    await writeManagedState({ ...nextState, bridgePid: 0 });
+  });
+
+  const ready = await ensureBridgeHealthReady(localBaseUrl, cfg.managedBridgeHealthTimeoutMs);
+  if (!ready.ok) {
+    try {
+      child.kill('SIGKILL');
+    } catch {}
+    throw new Error(`managed bridge did not become healthy (${ready.probe.reason || `HTTP ${ready.probe.code}`})`);
+  }
+
+  MANAGED_BRIDGE_RUNTIME.child = child;
+  MANAGED_BRIDGE_RUNTIME.healthUrl = localBaseUrl;
+
+  await writeManagedState({
+    ...state,
+    bridgePid: child.pid || 0,
+    bridgeToken,
+    bridgeBaseUrl: localBaseUrl,
+    recallApiBase: recallResolution.ok ? recallResolution.base : state.recallApiBase,
+  });
+  api.logger.info(`[ClawPilot] managed bridge ready at ${localBaseUrl}`);
+}
+
+async function ensureManagedBridgeRunning(api, cfg) {
+  if (!cfg.managedBridgeEnabled) return;
+  if (MANAGED_BRIDGE_RUNTIME.child && MANAGED_BRIDGE_RUNTIME.child.exitCode === null) {
+    const healthy = await probeBridgeHealth(`http://${cfg.managedBridgeHost}:${cfg.managedBridgePort}`);
+    if (healthy.ok) return;
+  }
+  await startManagedBridgeRuntime(api, cfg);
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 8_000) {
@@ -337,137 +777,217 @@ function isInstallClassBridgeError(message) {
   if (text.includes('unauthorized')) return true;
   if (text.includes('authentication failed')) return true;
   if (text.includes('bridgetoken')) return true;
+  if (text.includes('recall_api_base')) return true;
+  if (text.includes('recall region')) return true;
+  if (text.includes('tailscale')) return true;
+  if (text.includes('funnel')) return true;
   return false;
 }
 
 async function runSetupAssistant(api, options = {}) {
-  const installMode = options.mode === 'install';
-  const setupCommand = installMode ? '/clawpilot install' : '/clawpilot setup';
+  const setupCommand = '/clawpilot install';
   const lines = [
-    installMode ? 'ClawPilot install finalizer' : 'ClawPilot setup assistant',
-    installMode
-      ? 'I will finalize post-install setup with transparent step-by-step checks.'
-      : 'I will show each onboarding step so you can see exactly what I am checking.',
+    'ClawPilot install finalizer',
+    'Deterministic greedy recovery is enabled (bounded retries, no secret output).',
     '',
     ...buildTailscalePrimerLines(setupCommand),
     '',
   ];
+  const totalSteps = 10;
+  let step = 0;
 
-  const current = loadBridgeConfig(api);
-  lines.push(`Step 1/7: Read plugin config -> bridgeBaseUrl=${current.bridgeBaseUrl}`);
-  lines.push(`Step 1/7: bridgeToken is ${current.bridgeToken ? 'set' : 'missing'}`);
-
-  const tailscaleVersion = await runSystemCommand(api, ['tailscale', 'version']);
-  if (!tailscaleVersion.ok) {
-    lines.push('');
-    lines.push('Step 2/7: Tailscale CLI check -> FAILED');
-    lines.push('I could not run `tailscale version` on this host.');
-    lines.push(`Install/sign in to Tailscale, then rerun ${setupCommand}.`);
-    lines.push(`Debug: ${tailOutput(tailscaleVersion.combined || tailscaleVersion.stderr || 'command not available')}`);
-    return lines.join('\n');
-  }
-  lines.push('Step 2/7: Tailscale CLI check -> OK');
-
-  let signedIn = false;
-  const statusJson = await runSystemCommand(api, ['tailscale', 'status', '--json']);
-  if (statusJson.ok) {
-    const parsed = tryParseJson(statusJson.stdout);
-    const backendState = String(parsed?.BackendState || '').toLowerCase();
-    signedIn = backendState === 'running';
-  }
-
-  if (!signedIn) {
-    lines.push('Step 3/7: Tailscale auth state -> not signed in yet');
-    const tailscaleUp = await runSystemCommand(api, ['tailscale', 'up'], 30_000);
-    const authUrl = extractFirstHttpUrl(tailscaleUp.combined);
-    if (authUrl) {
-      lines.push(`Open this sign-in link, complete login, then rerun ${setupCommand}:\n${authUrl}`);
-    } else {
-      lines.push('I could not auto-finish Tailscale login from chat.');
-      lines.push(`Please open Tailscale app on this host and sign in, then rerun ${setupCommand}.`);
+  const failStep = (action, remediationLines, detailLines = []) => {
+    lines.push(`Step ${step}/${totalSteps}: ${action} -> FAILED`);
+    for (const detail of detailLines) {
+      if (detail) lines.push(detail);
+    }
+    for (const remediation of remediationLines) {
+      if (remediation) lines.push(remediation);
     }
     return lines.join('\n');
-  }
-  lines.push('Step 3/7: Tailscale auth state -> signed in');
+  };
+  const okStep = (action, detail = '') => {
+    lines.push(`Step ${step}/${totalSteps}: ${action} -> OK${detail ? ` (${detail})` : ''}`);
+  };
 
+  const cfg = loadBridgeConfig(api);
+  const maxAttempts = cfg.installRecoveryMaxAttempts;
+  const backoffMs = cfg.installRecoveryBackoffMs;
   let funnelUrl = '';
-  const funnelStatusJson = await runSystemCommand(api, ['tailscale', 'funnel', 'status', '--json']);
-  if (funnelStatusJson.ok) {
-    funnelUrl = findFirstTsNetUrl(tryParseJson(funnelStatusJson.stdout));
-    if (!funnelUrl) funnelUrl = findFirstTsNetUrl(funnelStatusJson.combined);
+
+  step += 1;
+  okStep('read plugin config', `bridge=${cfg.bridgeBaseUrl}`);
+
+  step += 1;
+  const recallResolution = await resolveRecallApiBase(api, cfg);
+  if (!recallResolution.ok) {
+    return failStep(
+      'resolve RECALL_API_BASE',
+      [
+        'Set RECALL_API_BASE to your Recall workspace region endpoint, then rerun /clawpilot install.',
+        'Example: openclaw config set plugins.entries.clawpilot.config.recallApiBase "https://<region>.recall.ai"',
+      ],
+      [recallResolution.reason || 'Recall API base could not be resolved from config/state/env/probe.'],
+    );
   }
-  if (!funnelUrl) {
-    const funnelStatusText = await runSystemCommand(api, ['tailscale', 'funnel', 'status']);
-    funnelUrl = findFirstTsNetUrl(funnelStatusText.combined);
+  await updateClawpilotPluginConfig(api, { recallApiBase: recallResolution.base });
+  await writeManagedState({ ...(await readManagedState()), recallApiBase: recallResolution.base });
+  okStep('resolve RECALL_API_BASE', `${recallResolution.base} via ${recallResolution.source}`);
+
+  step += 1;
+  try {
+    await ensureManagedBridgeRunning(api, cfg);
+    okStep('start managed bridge service');
+  } catch (err) {
+    return failStep(
+      'start managed bridge service',
+      [
+        'Ensure bundled bridge runtime files exist and required env vars are set (RECALL_API_KEY, WEBHOOK_SECRET, WEBHOOK_BASE_URL).',
+        'Then rerun /clawpilot install.',
+      ],
+      [tailOutput(redactSensitiveText(err?.message || err))],
+    );
   }
 
-  if (!funnelUrl) {
-    lines.push(`Step 4/7: Funnel status -> missing. Trying to enable funnel on port ${DEFAULT_BRIDGE_PORT}...`);
-    await runSystemCommand(api, ['tailscale', 'funnel', DEFAULT_BRIDGE_PORT], 20_000);
-    const retry = await runSystemCommand(api, ['tailscale', 'funnel', 'status', '--json']);
-    if (retry.ok) funnelUrl = findFirstTsNetUrl(tryParseJson(retry.stdout)) || findFirstTsNetUrl(retry.combined);
+  step += 1;
+  const tailscaleResolution = await resolveTailscaleBinary(api);
+  if (!tailscaleResolution.ok) {
+    return failStep(
+      'resolve tailscale binary',
+      [
+        'Install/sign in to Tailscale, then rerun /clawpilot install.',
+        `macOS app path checked: ${TAILSCALE_CANDIDATES[1]}`,
+      ],
+      [tailscaleResolution.reason],
+    );
   }
+  const tailscaleBin = tailscaleResolution.bin;
+  okStep('resolve tailscale binary', tailscaleBin);
 
-  if (!funnelUrl || !isHttpsTsNetUrl(funnelUrl)) {
-    lines.push('Step 4/7: Funnel URL discovery -> FAILED');
-    lines.push('I could not find a valid `https://*.ts.net` Funnel URL for this host.');
-    lines.push(`Enable Funnel for bridge port 3001 in Tailscale, then rerun ${setupCommand}.`);
-    return lines.join('\n');
-  }
-  lines.push(`Step 4/7: Funnel URL discovery -> OK (${funnelUrl})`);
-
-  const funnelHealth = await probeBridgeHealth(funnelUrl);
-  if (!funnelHealth.ok) {
-    lines.push('Step 5/7: Funnel -> bridge health check -> FAILED');
-    lines.push(`Checked ${funnelHealth.url || `${funnelUrl}/health`} and did not get expected bridge health response.`);
-    lines.push(`Reason: ${funnelHealth.reason || `HTTP ${funnelHealth.code}`}`);
-    lines.push(`Start the bridge service, confirm Funnel points to port 3001, then rerun ${setupCommand}.`);
-    return lines.join('\n');
-  }
-  lines.push('Step 5/7: Funnel -> bridge health check -> OK');
-
-  let bridgeToken = current.bridgeToken;
-  if (!bridgeToken) {
-    const envToken = await runSystemCommand(api, ['printenv', 'BRIDGE_API_TOKEN']);
-    const candidate = String(envToken.stdout || '').trim();
-    if (candidate) {
-      bridgeToken = candidate;
-      lines.push('Step 6/7: Bridge token auto-discovery -> found BRIDGE_API_TOKEN in runtime environment');
-    } else {
-      lines.push('Step 6/7: Bridge token auto-discovery -> not found in runtime environment');
+  step += 1;
+  let tailscaleAuthed = false;
+  let tailscaleAuthUrl = '';
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const status = await runTailscale(api, tailscaleBin, ['status', '--json']);
+    if (status.ok) {
+      const parsed = tryParseJson(status.stdout);
+      if (String(parsed?.BackendState || '').toLowerCase() === 'running') {
+        tailscaleAuthed = true;
+        break;
+      }
     }
-  } else {
-    lines.push('Step 6/7: Bridge token -> already configured');
+    const up = await runTailscale(api, tailscaleBin, ['up'], 35_000);
+    const maybeUrl = extractFirstHttpUrl(up.combined);
+    if (maybeUrl) tailscaleAuthUrl = maybeUrl;
+    if (attempt < maxAttempts) await sleep(backoffMs);
   }
+  if (!tailscaleAuthed) {
+    return failStep(
+      'tailscale auth state',
+      [
+        tailscaleAuthUrl
+          ? `Open this link, complete login, then rerun /clawpilot install: ${tailscaleAuthUrl}`
+          : 'Open Tailscale on this host, sign in, then rerun /clawpilot install.',
+      ],
+      ['Could not confirm BackendState=Running after bounded retries.'],
+    );
+  }
+  okStep('tailscale auth state');
 
+  step += 1;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    funnelUrl = await discoverFunnelUrl(api, tailscaleBin);
+    if (funnelUrl && isHttpsTsNetUrl(funnelUrl)) break;
+    await runTailscale(api, tailscaleBin, ['funnel', String(cfg.managedBridgePort)], 20_000);
+    if (attempt < maxAttempts) await sleep(backoffMs);
+  }
+  if (!funnelUrl || !isHttpsTsNetUrl(funnelUrl)) {
+    return failStep(
+      'discover tailscale funnel URL',
+      [
+        `Enable Funnel for port ${cfg.managedBridgePort} then rerun /clawpilot install.`,
+        `Try: ${tailscaleBin} funnel ${cfg.managedBridgePort}`,
+      ],
+      ['Expected a valid https://*.ts.net funnel URL.'],
+    );
+  }
+  okStep('discover tailscale funnel URL', funnelUrl);
+
+  step += 1;
+  const localBridgeUrl = `http://${cfg.managedBridgeHost}:${cfg.managedBridgePort}`;
+  let localHealth = { ok: false, reason: '', code: 0 };
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    localHealth = await probeBridgeHealth(localBridgeUrl);
+    if (localHealth.ok) break;
+    try {
+      await ensureManagedBridgeRunning(api, cfg);
+    } catch {}
+    if (attempt < maxAttempts) await sleep(backoffMs);
+  }
+  if (!localHealth.ok) {
+    return failStep(
+      'local bridge health check',
+      ['Managed bridge did not become healthy. Restart OpenClaw daemon and rerun /clawpilot install.'],
+      [localHealth.reason || `HTTP ${localHealth.code}`],
+    );
+  }
+  okStep('local bridge health check');
+
+  step += 1;
+  let publicHealth = { ok: false, reason: '', code: 0 };
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    publicHealth = await probeBridgeHealth(funnelUrl);
+    if (publicHealth.ok) break;
+    await runTailscale(api, tailscaleBin, ['funnel', String(cfg.managedBridgePort)], 20_000);
+    if (attempt < maxAttempts) await sleep(backoffMs);
+  }
+  if (!publicHealth.ok) {
+    return failStep(
+      'public funnel health check',
+      ['Verify Funnel routing to local bridge port and rerun /clawpilot install.'],
+      [publicHealth.reason || `HTTP ${publicHealth.code}`],
+    );
+  }
+  okStep('public funnel health check');
+
+  step += 1;
+  const bridgeToken = await ensureBridgeToken(api);
   await updateClawpilotPluginConfig(api, {
     bridgeBaseUrl: funnelUrl,
-    ...(bridgeToken ? { bridgeToken } : {}),
+    bridgeToken,
+    recallApiBase: recallResolution.base,
   });
-  lines.push('Step 7/7: Saved plugin bridge config');
+  let authAligned = false;
+  let authProbe = { unauthCode: 0, authCode: 0, reason: '' };
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    authProbe = await probeBridgeAuth(funnelUrl, bridgeToken);
+    if (authProbe.unauthCode === 401 && authProbe.authCode === 200) {
+      authAligned = true;
+      break;
+    }
+    try {
+      await ensureManagedBridgeRunning(api, cfg);
+    } catch {}
+    if (attempt < maxAttempts) await sleep(backoffMs);
+  }
+  if (!authAligned) {
+    return failStep(
+      'bridge auth alignment preflight',
+      [
+        `Run /clawpilot connect ${funnelUrl} --token <BRIDGE_API_TOKEN> after verifying bridge auth.`,
+        'Then rerun /clawpilot install.',
+      ],
+      [
+        `Observed unauth=${authProbe.unauthCode || 0}, auth=${authProbe.authCode || 0}`,
+        authProbe.reason ? `Reason: ${tailOutput(redactSensitiveText(authProbe.reason))}` : '',
+      ],
+    );
+  }
+  okStep('bridge auth alignment preflight');
 
-  const authProbe = await probeBridgeAuth(funnelUrl, bridgeToken);
-  if (authProbe.unauthCode === 401 && authProbe.authCode === 200) {
-    lines.push('Preflight: auth alignment OK (unauth 401 + auth 200).');
-    lines.push('✅ Setup complete. You can now run /clawpilot status or /clawpilot join.');
-    return lines.join('\n');
-  }
-  if (authProbe.unauthCode === 200) {
-    lines.push('Preflight: bridge auth appears disabled (unauth 200).');
-    lines.push('✅ Bridge is reachable. You can run /clawpilot status.');
-    return lines.join('\n');
-  }
-  if (authProbe.unauthCode === 401 && !bridgeToken) {
-    lines.push('Preflight: bridge auth is enabled, but plugin still has no bridge token.');
-    lines.push('Run this in chat once you have the bridge token:');
-    lines.push(`/clawpilot connect ${funnelUrl} --token <BRIDGE_API_TOKEN>`);
-    return lines.join('\n');
-  }
-
-  lines.push(`Preflight: bridge auth check incomplete (unauth=${authProbe.unauthCode || 0}, auth=${authProbe.authCode || 0}).`);
-  if (authProbe.reason) lines.push(`Reason: ${authProbe.reason}`);
-  lines.push('If needed, run:');
-  lines.push(`/clawpilot connect ${funnelUrl} --token <BRIDGE_API_TOKEN>`);
+  step += 1;
+  okStep('final pass/fail');
+  lines.push('✅ Install finalizer complete. You can now run /clawpilot status or /clawpilot join.');
   return lines.join('\n');
 }
 
@@ -711,8 +1231,8 @@ function buildHelpText() {
     '  Runs transparent step-by-step setup checks and remediation.',
     '',
     '/clawpilot setup',
-    '  Chat-only onboarding assistant (same checks as install finalizer).',
-    '  Includes transparent step-by-step progress and signup guidance.',
+    '  Alias of /clawpilot install.',
+    '  Runs the same deterministic greedy recovery flow.',
     '',
     '/clawpilot connect <bridge_url> --token <BRIDGE_API_TOKEN>',
     '  Save bridge URL/token from chat and validate auth alignment.',
@@ -749,6 +1269,8 @@ function buildHelpText() {
     '',
     '/clawpilot reveal <commitments|contacts|context|notes>',
     '  Owner-only one-time reveal grant for shared mode.',
+    '',
+    'Common typo aliases are also supported (for example: /clawpiolt).',
     '',
     'Examples:',
     '/clawpilot install',
@@ -1063,13 +1585,14 @@ function buildBridgeUnauthorizedMessage(bridgeToken) {
   if (!bridgeToken) {
     return [
       'Bridge authentication is enabled, but plugin bridgeToken is not configured.',
-      'Set plugins.entries.clawpilot.config.bridgeToken to match BRIDGE_API_TOKEN, then restart OpenClaw daemon.',
-      'For chat-only onboarding, run /clawpilot install or /clawpilot connect <bridge_url> --token <BRIDGE_API_TOKEN>.',
+      'Run /clawpilot install to auto-generate/sync token and revalidate auth.',
+      'Or set plugins.entries.clawpilot.config.bridgeToken to match BRIDGE_API_TOKEN, then restart OpenClaw daemon.',
     ].join(' ');
   }
   return [
     'Bridge authentication failed (401): configured plugin bridgeToken was rejected.',
-    'Re-sync plugins.entries.clawpilot.config.bridgeToken with BRIDGE_API_TOKEN (token may have rotated), then restart OpenClaw daemon.',
+    'Run /clawpilot install to re-sync token and verify preflight.',
+    'If needed, re-sync plugins.entries.clawpilot.config.bridgeToken with BRIDGE_API_TOKEN and restart OpenClaw daemon.',
     'For chat-only onboarding, run /clawpilot install.',
   ].join(' ');
 }
@@ -1084,30 +1607,67 @@ async function callBridge(api, path, options = 'GET') {
     body = options.body;
   }
 
-  const { bridgeBaseUrl, bridgeToken } = loadBridgeConfig(api);
-  const headers = { 'Content-Type': 'application/json' };
-  if (bridgeToken) headers.Authorization = `Bearer ${bridgeToken}`;
+  let cfg = loadBridgeConfig(api);
+  let bridgeBaseUrl = cfg.bridgeBaseUrl;
+  let bridgeToken = cfg.bridgeToken;
+  const localManagedBridge = cfg.managedBridgeEnabled && isLoopbackBridgeBaseUrl(bridgeBaseUrl);
 
-  const request = { method, headers };
-  if (body !== undefined) {
-    request.body = JSON.stringify(body);
+  if (localManagedBridge) {
+    try {
+      await ensureManagedBridgeRunning(api, cfg);
+    } catch (err) {
+      api.logger.warn(`[ClawPilot] managed bridge auto-start failed: ${tailOutput(redactSensitiveText(err?.message || err))}`);
+    }
+    if (!bridgeToken) {
+      bridgeToken = await ensureBridgeToken(api);
+    }
   }
+
+  const makeRequest = async (tokenValue) => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (tokenValue) headers.Authorization = `Bearer ${tokenValue}`;
+    const request = { method, headers };
+    if (body !== undefined) request.body = JSON.stringify(body);
+    return fetchWithTimeout(`${bridgeBaseUrl}${path}`, request, 12_000);
+  };
 
   let res;
   try {
-    res = await fetch(`${bridgeBaseUrl}${path}`, request);
+    res = await makeRequest(bridgeToken);
   } catch (err) {
-    const causeCode = err?.cause?.code ? ` (${err.cause.code})` : '';
-    throw new Error(
-      `Bridge is unreachable at ${bridgeBaseUrl}${path}${causeCode}. Verify bridgeBaseUrl, ensure bridge service is running, and confirm Tailscale Funnel points to this bridge (/health). Run /clawpilot install for guided chat onboarding.`
-    );
+    if (localManagedBridge) {
+      try {
+        await ensureManagedBridgeRunning(api, cfg);
+        res = await makeRequest(bridgeToken);
+      } catch {
+        const causeCode = err?.cause?.code ? ` (${err.cause.code})` : '';
+        throw new Error(
+          `Bridge is unreachable at ${bridgeBaseUrl}${path}${causeCode}. Verify bridgeBaseUrl and managed bridge health, then rerun /clawpilot install.`
+        );
+      }
+    } else {
+      const causeCode = err?.cause?.code ? ` (${err.cause.code})` : '';
+      throw new Error(
+        `Bridge is unreachable at ${bridgeBaseUrl}${path}${causeCode}. Verify bridgeBaseUrl, ensure bridge service is running, and confirm Tailscale Funnel points to this bridge (/health). Run /clawpilot install for guided chat onboarding.`
+      );
+    }
   }
 
-  const text = await res.text();
+  let text = await res.text();
   let responseBody = text;
   try {
     responseBody = JSON.parse(text);
   } catch {}
+
+  if (res.status === 401 && localManagedBridge) {
+    bridgeToken = await ensureBridgeToken(api);
+    res = await makeRequest(bridgeToken);
+    text = await res.text();
+    responseBody = text;
+    try {
+      responseBody = JSON.parse(text);
+    } catch {}
+  }
 
   if (!res.ok) {
     if (res.status === 401) {
@@ -1119,6 +1679,23 @@ async function callBridge(api, path, options = 'GET') {
 }
 
 export default function register(api) {
+  api.registerService({
+    id: BRIDGE_RUNTIME_ID,
+    start: async (serviceContext) => {
+      MANAGED_BRIDGE_RUNTIME.serviceContext = serviceContext;
+      const cfg = loadBridgeConfig(api);
+      if (!cfg.managedBridgeEnabled) {
+        api.logger.info('[ClawPilot] managed bridge service disabled by plugin config');
+        return;
+      }
+      await ensureManagedBridgeRunning(api, cfg);
+    },
+    stop: async () => {
+      const cfg = loadBridgeConfig(api);
+      await stopManagedBridgeRuntime(api, cfg);
+    },
+  });
+
   api.on('before_tool_call', (event, ctx) => {
     try {
       const { blockLegacyMeetingLaunchScripts } = loadBridgeConfig(api);
@@ -1203,197 +1780,204 @@ export default function register(api) {
     return { content: queued };
   });
 
-  api.registerCommand({
-    name: 'clawpilot',
-    description: 'Control ClawPilot: help | install | setup | connect | status | join | pause | resume | transcript | mode | audience | privacy | reveal',
-    acceptsArgs: true,
-    handler: async (ctx) => {
-      const rawArgs = (ctx.args || '').trim();
-      const [rawAction, ...rest] = rawArgs ? rawArgs.split(/\s+/) : ['help'];
-      const action = (rawAction || 'help').toLowerCase();
-      const actionArgs = rest.join(' ').trim();
+  const bridgeActions = new Set([
+    'install',
+    'setup',
+    'connect',
+    'status',
+    'join',
+    'pause',
+    'resume',
+    'transcript',
+    'mode',
+    'audience',
+    'privacy',
+    'reveal',
+  ]);
 
-      try {
-        if (!action || action === 'help') {
-          return { text: buildHelpText() };
-        }
+  const clawpilotHandler = async (ctx) => {
+    const rawArgs = (ctx.args || '').trim();
+    const [rawAction, ...rest] = rawArgs ? rawArgs.split(/\s+/) : ['help'];
+    const action = (rawAction || 'help').toLowerCase();
+    const actionArgs = rest.join(' ').trim();
 
-        if (action === 'setup' || action === 'install') {
-          return { text: await runSetupAssistant(api, { mode: action === 'install' ? 'install' : 'setup' }) };
-        }
+    try {
+      if (!action || action === 'help') {
+        return { text: buildHelpText() };
+      }
 
-        if (action === 'connect') {
-          return { text: await runConnectAssistant(api, actionArgs) };
-        }
+      if (action === 'setup' || action === 'install') {
+        return { text: await runSetupAssistant(api, { mode: 'install' }) };
+      }
 
-        if (action === 'status') {
-          const status = await callBridge(api, '/copilot/status');
-          return { text: `ClawPilot status:\n${formatStatusResponse(status)}` };
-        }
+      if (action === 'connect') {
+        return { text: await runConnectAssistant(api, actionArgs) };
+      }
 
-        if (action === 'join') {
-          const parsed = parseJoinArgs(actionArgs);
-          if (!parsed.meetingUrl) {
-            return {
-              text: [
-                'Usage:',
-                '/clawpilot join <meeting_url>',
-                '/clawpilot join <meeting_url> --name "Custom Bot Name"',
-                '',
-                "Default bot name is <your first name>'s Lobster 🦞.",
-                '',
-                'Supported: Google Meet, Zoom, Microsoft Teams',
-              ].join('\n'),
-            };
-          }
+      if (action === 'status') {
+        const status = await callBridge(api, '/copilot/status');
+        return { text: `ClawPilot status:\n${formatStatusResponse(status)}` };
+      }
 
-          const payload = { meeting_url: parsed.meetingUrl };
-          const routeTarget = buildRouteTarget(ctx);
-          rememberHumanFirstName(ctx, null, routeTarget);
-          const ownerBinding = buildOwnerBinding(ctx);
-          const { teamAgent, manualJoinReplaceActive } = loadBridgeConfig(api);
-          if (routeTarget) {
-            console.log(`[ClawPilot] route_target resolved ${JSON.stringify(routeTarget)}`);
-          } else {
-            console.warn(`[ClawPilot] route_target missing ctx=${JSON.stringify(summarizeRouteContext(ctx))}`);
-          }
-          if (routeTarget) payload.route_target = routeTarget;
-          if (ownerBinding) payload.owner_binding = ownerBinding;
-          payload.team_agent = teamAgent;
-          payload.replace_active = manualJoinReplaceActive;
-          if (parsed.botName) payload.bot_name = parsed.botName;
-          if (!parsed.botName) {
-            const defaultLobsterName = inferDefaultLobsterName(ctx, null, routeTarget);
-            if (defaultLobsterName) {
-              payload.bot_name = defaultLobsterName;
-            } else {
-              payload.bot_name = 'Lobster 🦞';
-            }
-          }
-          const result = await callBridge(api, '/launch', { method: 'POST', body: payload });
-          return { text: formatJoinSummary(result) };
-        }
-
-        if (action === 'pause') {
-          const result = await callBridge(api, '/mute', 'POST');
-          return { text: `Paused.\n${JSON.stringify(result, null, 2)}` };
-        }
-
-        if (action === 'resume') {
-          const result = await callBridge(api, '/unmute', 'POST');
-          return { text: `Resumed.\n${JSON.stringify(result, null, 2)}` };
-        }
-
-        if (action === 'transcript') {
-          const mode = (rest[0] || '').toLowerCase();
-          if (mode === 'on') {
-            const result = await callBridge(api, '/meetverbose/on', 'POST');
-            return { text: `Transcript mirror ON.\n${JSON.stringify(result, null, 2)}` };
-          }
-          if (mode === 'off') {
-            const result = await callBridge(api, '/meetverbose/off', 'POST');
-            return { text: `Transcript mirror OFF.\n${JSON.stringify(result, null, 2)}` };
-          }
+      if (action === 'join') {
+        const parsed = parseJoinArgs(actionArgs);
+        if (!parsed.meetingUrl) {
           return {
             text: [
               'Usage:',
-              '/clawpilot transcript on',
-              '/clawpilot transcript off',
+              '/clawpilot join <meeting_url>',
+              '/clawpilot join <meeting_url> --name "Custom Bot Name"',
+              '',
+              "Default bot name is <your first name>'s Lobster 🦞.",
+              '',
+              'Supported: Google Meet, Zoom, Microsoft Teams',
             ].join('\n'),
           };
         }
 
-        if (action === 'mode') {
-          const requested = (rest[0] || '').toLowerCase();
-          if (!requested || requested === 'status' || requested === 'get' || requested === 'list') {
-            const modeStatus = await callBridge(api, '/copilot/mode');
-            return { text: `Copilot mode:\n${formatModeStatus(modeStatus)}` };
-          }
-          const result = await callBridge(api, '/copilot/mode', {
-            method: 'POST',
-            body: { mode: requested },
-          });
-          return { text: `Mode updated.\n${formatModeStatus(result)}` };
+        const payload = { meeting_url: parsed.meetingUrl };
+        const routeTarget = buildRouteTarget(ctx);
+        rememberHumanFirstName(ctx, null, routeTarget);
+        const ownerBinding = buildOwnerBinding(ctx);
+        const { teamAgent, manualJoinReplaceActive } = loadBridgeConfig(api);
+        if (routeTarget) {
+          console.log(`[ClawPilot] route_target resolved ${JSON.stringify(routeTarget)}`);
+        } else {
+          console.warn(`[ClawPilot] route_target missing ctx=${JSON.stringify(summarizeRouteContext(ctx))}`);
         }
-
-        if (action === 'audience') {
-          const requested = (rest[0] || '').toLowerCase();
-          if (!requested) {
-            return {
-              text: [
-                'Usage:',
-                '/clawpilot audience private',
-                '/clawpilot audience shared',
-              ].join('\n'),
-            };
-          }
-          const result = await callBridge(api, '/copilot/audience', {
-            method: 'POST',
-            body: { audience: requested },
-          });
-          return { text: `Audience updated.\n${formatPrivacyStatus(result)}` };
+        if (routeTarget) payload.route_target = routeTarget;
+        if (ownerBinding) payload.owner_binding = ownerBinding;
+        payload.team_agent = teamAgent;
+        payload.replace_active = manualJoinReplaceActive;
+        if (parsed.botName) payload.bot_name = parsed.botName;
+        if (!parsed.botName) {
+          const defaultLobsterName = inferDefaultLobsterName(ctx, null, routeTarget);
+          payload.bot_name = defaultLobsterName || 'Lobster 🦞';
         }
+        const result = await callBridge(api, '/launch', { method: 'POST', body: payload });
+        return { text: formatJoinSummary(result) };
+      }
 
-        if (action === 'privacy') {
-          const status = await callBridge(api, '/copilot/privacy');
-          return { text: `Copilot privacy:\n${formatPrivacyStatus(status)}` };
+      if (action === 'pause') {
+        const result = await callBridge(api, '/mute', 'POST');
+        return { text: `Paused.\n${JSON.stringify(result, null, 2)}` };
+      }
+
+      if (action === 'resume') {
+        const result = await callBridge(api, '/unmute', 'POST');
+        return { text: `Resumed.\n${JSON.stringify(result, null, 2)}` };
+      }
+
+      if (action === 'transcript') {
+        const mode = (rest[0] || '').toLowerCase();
+        if (mode === 'on') {
+          const result = await callBridge(api, '/meetverbose/on', 'POST');
+          return { text: `Transcript mirror ON.\n${JSON.stringify(result, null, 2)}` };
         }
-
-        if (action === 'reveal') {
-          const category = (rest[0] || '').toLowerCase();
-          if (!category) {
-            return {
-              text: [
-                'Usage:',
-                '/clawpilot reveal commitments',
-                '/clawpilot reveal contacts',
-                '/clawpilot reveal context',
-                '/clawpilot reveal notes',
-              ].join('\n'),
-            };
-          }
-          const ownerBinding = buildOwnerBinding(ctx);
-          const result = await callBridge(api, '/copilot/reveal', {
-            method: 'POST',
-            body: { category, owner_binding: ownerBinding || {} },
-          });
-          return { text: `Reveal granted.\n${formatPrivacyStatus(result)}` };
+        if (mode === 'off') {
+          const result = await callBridge(api, '/meetverbose/off', 'POST');
+          return { text: `Transcript mirror OFF.\n${JSON.stringify(result, null, 2)}` };
         }
-
         return {
-          text: [
-            `Unknown command: ${action}`,
-            '',
-            buildHelpText(),
-          ].join('\n'),
+          text: ['/clawpilot transcript on', '/clawpilot transcript off'].join('\n'),
         };
-      } catch (err) {
-        const message = String(err?.message || err || 'unknown error');
-        if ((action === 'status' || action === 'join') && isInstallClassBridgeError(message)) {
-          try {
-            const recovery = await runSetupAssistant(api, { mode: 'install' });
-            return {
-              text: [
-                `ClawPilot command failed: ${message}`,
-                '',
-                'Running guided install recovery now:',
-                recovery,
-              ].join('\n'),
-            };
-          } catch (setupErr) {
-            const setupMessage = String(setupErr?.message || setupErr || 'unknown error');
-            return {
-              text: `ClawPilot command failed: ${message}\n\nInstall recovery failed: ${setupMessage}\nTry:\n/clawpilot install`,
-            };
-          }
+      }
+
+      if (action === 'mode') {
+        const requested = (rest[0] || '').toLowerCase();
+        if (!requested || requested === 'status' || requested === 'get' || requested === 'list') {
+          const modeStatus = await callBridge(api, '/copilot/mode');
+          return { text: `Copilot mode:\n${formatModeStatus(modeStatus)}` };
         }
-        if (/bridge is unreachable|authentication failed|bridgeToken/i.test(message)) {
+        const result = await callBridge(api, '/copilot/mode', {
+          method: 'POST',
+          body: { mode: requested },
+        });
+        return { text: `Mode updated.\n${formatModeStatus(result)}` };
+      }
+
+      if (action === 'audience') {
+        const requested = (rest[0] || '').toLowerCase();
+        if (!requested) {
+          return { text: ['/clawpilot audience private', '/clawpilot audience shared'].join('\n') };
+        }
+        const result = await callBridge(api, '/copilot/audience', {
+          method: 'POST',
+          body: { audience: requested },
+        });
+        return { text: `Audience updated.\n${formatPrivacyStatus(result)}` };
+      }
+
+      if (action === 'privacy') {
+        const status = await callBridge(api, '/copilot/privacy');
+        return { text: `Copilot privacy:\n${formatPrivacyStatus(status)}` };
+      }
+
+      if (action === 'reveal') {
+        const category = (rest[0] || '').toLowerCase();
+        if (!category) {
           return {
-            text: `ClawPilot command failed: ${message}\n\nTry chat-only onboarding:\n/clawpilot install`,
+            text: [
+              '/clawpilot reveal commitments',
+              '/clawpilot reveal contacts',
+              '/clawpilot reveal context',
+              '/clawpilot reveal notes',
+            ].join('\n'),
           };
         }
-        return { text: `ClawPilot command failed: ${message}` };
+        const ownerBinding = buildOwnerBinding(ctx);
+        const result = await callBridge(api, '/copilot/reveal', {
+          method: 'POST',
+          body: { category, owner_binding: ownerBinding || {} },
+        });
+        return { text: `Reveal granted.\n${formatPrivacyStatus(result)}` };
       }
-    },
+
+      return {
+        text: [`Unknown command: ${action}`, '', buildHelpText()].join('\n'),
+      };
+    } catch (err) {
+      const message = String(err?.message || err || 'unknown error');
+      if (bridgeActions.has(action) && isInstallClassBridgeError(message)) {
+        try {
+          const recovery = await runSetupAssistant(api, { mode: 'install', trigger: action });
+          return {
+            text: [
+              `ClawPilot command failed: ${message}`,
+              '',
+              'Running greedy install recovery now:',
+              recovery,
+            ].join('\n'),
+          };
+        } catch (setupErr) {
+          const setupMessage = String(setupErr?.message || setupErr || 'unknown error');
+          return {
+            text: `ClawPilot command failed: ${message}\n\nInstall recovery failed: ${setupMessage}\nTry:\n/clawpilot install`,
+          };
+        }
+      }
+      if (/bridge is unreachable|authentication failed|bridgetoken|tailscale|funnel/i.test(message)) {
+        return {
+          text: `ClawPilot command failed: ${message}\n\nTry chat-only onboarding:\n/clawpilot install`,
+        };
+      }
+      return { text: `ClawPilot command failed: ${message}` };
+    }
+  };
+
+  api.registerCommand({
+    name: 'clawpilot',
+    description: 'Control ClawPilot: help | install | setup | connect | status | join | pause | resume | transcript | mode | audience | privacy | reveal',
+    acceptsArgs: true,
+    handler: clawpilotHandler,
   });
+
+  for (const alias of CLAWPILOT_COMMAND_ALIASES) {
+    api.registerCommand({
+      name: alias,
+      description: 'Alias for /clawpilot',
+      acceptsArgs: true,
+      handler: clawpilotHandler,
+    });
+  }
 }

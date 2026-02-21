@@ -1,0 +1,71 @@
+<svg width="1400" height="820" viewBox="0 0 1400 820" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Lobster workflow visual</title>
+  <desc id="desc">Four-step flow from install to live meeting actions.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0A1022"/>
+      <stop offset="100%" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="card1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FF6A00"/>
+      <stop offset="100%" stop-color="#FB5607"/>
+    </linearGradient>
+    <linearGradient id="card2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2563EB"/>
+      <stop offset="100%" stop-color="#1D4ED8"/>
+    </linearGradient>
+    <linearGradient id="card3" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0891B2"/>
+      <stop offset="100%" stop-color="#0E7490"/>
+    </linearGradient>
+    <linearGradient id="card4" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#16A34A"/>
+      <stop offset="100%" stop-color="#15803D"/>
+    </linearGradient>
+    <style>
+      .title { font: 700 46px Inter, system-ui, -apple-system, Segoe UI, sans-serif; fill: #F8FAFC; }
+      .subtitle { font: 500 22px Inter, system-ui, -apple-system, Segoe UI, sans-serif; fill: #D1D5DB; }
+      .step { font: 700 26px Inter, system-ui, -apple-system, Segoe UI, sans-serif; fill: #FFFFFF; }
+      .body { font: 500 20px Inter, system-ui, -apple-system, Segoe UI, sans-serif; fill: #F8FAFC; }
+      .code { font: 600 18px ui-monospace, SFMono-Regular, Menlo, Monaco, monospace; fill: #E5E7EB; }
+      .foot { font: 500 18px Inter, system-ui, -apple-system, Segoe UI, sans-serif; fill: #9CA3AF; }
+    </style>
+  </defs>
+
+  <rect width="1400" height="820" fill="url(#bg)" rx="24"/>
+  <text x="60" y="90" class="title">Lobster in 4 steps</text>
+  <text x="60" y="128" class="subtitle">Connect. Participate. Act.</text>
+
+  <rect x="60" y="180" width="300" height="500" rx="22" fill="url(#card1)"/>
+  <text x="88" y="234" class="step">1. Install</text>
+  <text x="88" y="274" class="body">Add plugin + restart</text>
+  <text x="88" y="322" class="code">openclaw plugins install</text>
+  <text x="88" y="350" class="code">@lobster/lobster</text>
+
+  <rect x="390" y="180" width="300" height="500" rx="22" fill="url(#card2)"/>
+  <text x="418" y="234" class="step">2. Setup</text>
+  <text x="418" y="274" class="body">Run guided onboarding</text>
+  <text x="418" y="322" class="code">/lobster install</text>
+  <text x="418" y="350" class="code">/lobster connect ...</text>
+
+  <rect x="720" y="180" width="300" height="500" rx="22" fill="url(#card3)"/>
+  <text x="748" y="234" class="step">3. Join</text>
+  <text x="748" y="274" class="body">Bring AI into the call</text>
+  <text x="748" y="322" class="code">/lobster join &lt;meeting_url&gt;</text>
+  <text x="748" y="350" class="code">/lobster mode brainstorm</text>
+
+  <rect x="1050" y="180" width="300" height="500" rx="22" fill="url(#card4)"/>
+  <text x="1078" y="234" class="step">4. Act</text>
+  <text x="1078" y="274" class="body">Real-time meeting output</text>
+  <text x="1078" y="322" class="code">Suggestions, research,</text>
+  <text x="1078" y="350" class="code">follow-ups, assets</text>
+
+  <path d="M360 430H390" stroke="#94A3B8" stroke-width="6" stroke-linecap="round"/>
+  <path d="M690 430H720" stroke="#94A3B8" stroke-width="6" stroke-linecap="round"/>
+  <path d="M1020 430H1050" stroke="#94A3B8" stroke-width="6" stroke-linecap="round"/>
+  <polygon points="390,420 390,440 406,430" fill="#94A3B8"/>
+  <polygon points="720,420 720,440 736,430" fill="#94A3B8"/>
+  <polygon points="1050,420 1050,440 1066,430" fill="#94A3B8"/>
+
+  <text x="60" y="760" class="foot">Lobster is built for builders who want meeting AI that participates, not just records.</text>
+</svg>

@@ -91,6 +91,7 @@ Success criteria:
 | A-03 | Plugin visibility | Run plugin info | `clawpilot` loaded; expected version shown |
 | A-04 | Bridge required env | Start bridge with required env populated | Bridge starts cleanly |
 | A-05 | Bridge health | `GET /health` and `GET /copilot/status` | `status=ok`; expected fields present |
+| A-06 | macOS app-bundle tailscale detection | Remove `tailscale` from PATH, keep `/Applications/Tailscale.app/Contents/MacOS/Tailscale`; run `/clawpilot install` | Installer resolves Tailscale binary and proceeds without PATH entry |
 
 ### B. Command Behavior Matrix (Telegram, WhatsApp, Discord)
 
@@ -116,6 +117,7 @@ Success criteria:
 | B-18 | Bridge unavailable handling | Stop bridge temporarily; send `/clawpilot status` | User-friendly command failed message |
 | B-19 | Installer narration format | Ask installer AI to install from repo using protocol | Step-by-step `Step N/M: ... -> OK/FAILED` lines shown (best-effort) |
 | B-20 | Status auto-remediation after install drift | Simulate bridge/auth drift; send `/clawpilot status` | Plugin returns guided `/clawpilot install` recovery steps with PASS/FAIL style output |
+| B-21 | Typo-tolerant command aliases | Send `/clawpiolt status` (or another common typo alias) | Alias resolves and returns same behavior as `/clawpilot status` |
 
 ### C. Cross-Chat Routing Correctness
 
@@ -142,8 +144,9 @@ Success criteria:
 | E-01 | Duplicate join same meeting | Trigger second join to same meeting | Existing bot replaced or deterministic handling shown |
 | E-02 | Webhook token mismatch | Send webhook with bad token | Unauthorized/rejected behavior confirmed |
 | E-03 | Bridge restart recovery | Restart bridge during test run | Service returns healthy; new commands work |
-| E-04 | OpenClaw restart recovery | Restart OpenClaw daemon | Plugin loads and commands recover |
+| E-04 | OpenClaw restart recovery | Restart OpenClaw daemon | Plugin loads, managed bridge auto-recovers, and commands recover |
 | E-05 | Discord direct fallback | Disable/misconfigure Discord direct token, keep hooks valid | Delivery falls back via hooks path |
+| E-06 | Greedy recovery bounded retries | Force transient funnel/health failure during `/clawpilot install` | Recovery retries execute and either recover or fail once with deterministic remediation (no loops) |
 
 ### F. Security and Launch Safety
 
@@ -154,6 +157,7 @@ Success criteria:
 | F-03 | Repo secret scan | Run `npm run security:scan` | No obvious secrets found |
 | F-04 | Plugin pack sanity | Run plugin pack dry-run check | Packaging succeeds |
 | F-05 | Bridge auth required on launch | Call `POST /launch` without/with wrong bearer token | Unauthorized (401) until valid token is supplied |
+| F-06 | Chat/output secret redaction | Run `scripts/chat-install-lobster.sh` + `/clawpilot install` with auth enabled | No token/API key values appear in chat/install output or summaries |
 
 ### G. Upgrade and Uninstall Lifecycle
 

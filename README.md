@@ -8,24 +8,36 @@ ClawPilot connects Recall.ai live transcripts to OpenClaw so your copilot can re
 
 1. OpenClaw installed and working
 2. OpenClaw model/channel auth already configured
-3. Node.js 18+ on the bridge host
+3. Node.js 18+ on the OpenClaw host
 4. Recall.ai account and API key
-5. Active Tailscale Funnel URL that routes to bridge (`https://<node>.ts.net`)
+5. Tailscale installed on the OpenClaw host
 
-## Install ClawPilot Plugin
+## Recommended Install Path
 
 ```bash
-openclaw plugins install @clawpilot/clawpilot
-openclaw daemon restart
-openclaw plugins info clawpilot
+./scripts/chat-install-lobster.sh
 ```
 
-AI installer transparency protocol:
+This script enforces strict installer narration phases:
 
-1. Use `/Users/danpeguine/Projects/lobster/INSTALL_AGENT_PROTOCOL.md`
-2. If installer says only "done", run `/clawpilot install` in chat immediately.
+1. source check
+2. install plugin
+3. restart gateway
+4. verify plugin loaded
+5. run `/clawpilot install`
+6. final pass/fail
 
-Exact prompt snippet for AI installers:
+Output format is always:
+
+`Step N/M: <action> -> <OK|FAILED>`
+
+Greedy internal recovery runs before any visible `FAILED`. On first visible failure, the script stops and prints remediation.
+
+AI installer protocol reference:
+
+1. `/Users/danpeguine/Projects/lobster/INSTALL_AGENT_PROTOCOL.md`
+
+Exact prompt snippet:
 
 ```text
 Install Lobster and narrate progress in chat using exactly:
@@ -44,38 +56,31 @@ After install, run in chat:
 /clawpilot install
 ```
 
-`/clawpilot setup` remains supported as an alias.
+`/clawpilot setup` is kept as an alias of `/clawpilot install`.
 
-The setup assistant now explains:
+The install finalizer is deterministic and greedy:
 
-1. Why ClawPilot uses Tailscale Funnel (`https://*.ts.net`) for safer/stable bridge routing.
-2. How to sign up/install Tailscale (links included in chat).
-3. Step-by-step checks (Tailscale login, Funnel URL, bridge health, auth alignment).
+1. bounded retries for Tailscale auth, Funnel discovery/enablement, and health checks
+2. bridge token auto-generation/sync when missing
+3. auth preflight validation (`401` unauth + `200` auth)
+4. explicit remediation when `RECALL_API_BASE` cannot be resolved
 
 No terminal is required for the normal user path.
 
-Plugin-only limitation:
+Installer limitation:
 
 1. First-install narration cannot be hard-enforced before plugin load.
 2. Post-install transparency is guaranteed once plugin is loaded via `/clawpilot install`.
 
 ## Configure Runtime (Required)
 
-Bootstrap your env file:
+Bridge runtime is bundled in the plugin package and managed by plugin service lifecycle.
+
+Bootstrap your env file (region-aware; no hardcoded Recall region default):
 
 ```bash
 ./scripts/bootstrap-recall.sh
-cd services/clawpilot-bridge
-set -a; source ./.env; set +a
-npm install
-npm start
 ```
-
-Bootstrap enforces Funnel alignment and fails fast unless:
-
-1. `WEBHOOK_BASE_URL` is `https://*.ts.net`
-2. Local bridge `/health` is reachable
-3. Public Funnel `/health` reaches the same bridge
 
 Required environment variables:
 
@@ -83,7 +88,9 @@ Required environment variables:
 2. `RECALL_API_BASE` (match your Recall workspace region)
 3. `WEBHOOK_SECRET`
 4. `WEBHOOK_BASE_URL` (required `https://*.ts.net` for supported install/reinstall/update)
-5. `BRIDGE_API_TOKEN` (strongly recommended; bearer token for bridge control routes)
+5. `BRIDGE_API_TOKEN` (optional in env; plugin auto-generates/syncs if missing)
+
+Bootstrap and `/clawpilot install` both enforce Funnel alignment and bridge health.
 
 OpenClaw integration values are loaded from `openclaw.json`:
 
@@ -95,17 +102,13 @@ Optional bridge behavior:
 
 9. `DISCORD_DIRECT_DELIVERY` (default: `true`)
 
-Routing is channel-agnostic by default (via OpenClaw hooks). Discord direct delivery is an optional reliability adapter with fallback to OpenClaw hooks.
-
-Plugin auth alignment:
-
-- Configure plugin `bridgeToken` to exactly match `BRIDGE_API_TOKEN` once bridge auth is enabled.
-- Reinstall/reset can clear plugin config. Rerun bootstrap + auth checks after reinstall/update.
+Routing is channel-agnostic by default (via OpenClaw hooks). Discord direct delivery is an optional adapter with fallback to OpenClaw hooks.
 
 Quick preflight checks:
 
 ```bash
 ./scripts/require-tailscale-funnel.sh
+./scripts/chat-install-lobster.sh
 RUN_VPS_AUTH_CHECK=true npm run qa:quick-checks
 ```
 
@@ -155,14 +158,15 @@ Mode and privacy controls:
 
 ## Components
 
-1. `packages/clawpilot-plugin`: npm-installable OpenClaw plugin (`/clawpilot` command)
-2. `services/clawpilot-bridge`: Recall webhook receiver and OpenClaw hook bridge
-3. `services/clawpilot-bridge/prompts/lobster.md`: editable meeting copilot prompt pack
+1. `packages/clawpilot-plugin`: npm-installable OpenClaw plugin (`/clawpilot` command + managed bridge service)
+2. `packages/clawpilot-plugin/bridge-runtime`: bundled bridge runtime shipped inside plugin artifact
+3. `services/clawpilot-bridge`: source bridge implementation and ops docs
+4. `services/clawpilot-bridge/prompts/lobster.md`: editable meeting copilot prompt pack
 
 ## Security Notes
 
-1. The plugin does not read environment variables at runtime.
-2. The plugin only calls your configured bridge endpoint for explicit `/clawpilot` commands.
+1. Installer/finalizer output redacts token/API secret values.
+2. Plugin-managed runtime can read required process env (`RECALL_API_KEY`, `RECALL_API_BASE`, `WEBHOOK_SECRET`) without printing values.
 3. Non-private bridge hosts are blocked by default unless `allowRemoteBridge` is explicitly enabled.
 4. `/launch` responses are sanitized and do not return webhook URLs or tokens.
 
