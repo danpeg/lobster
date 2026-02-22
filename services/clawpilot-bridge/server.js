@@ -331,12 +331,19 @@ function refreshOpenClawHookTokenFromConfig(reason = '') {
 function maybeDisableCopilotCliRouted(error) {
   if (!copilotCliRoutedEnabled) return false;
   const message = String(error?.message || error || '');
-  if (!/pairing required|gateway connect failed/i.test(message)) {
+  const pairingFailure = /pairing required|gateway connect failed/i.test(message);
+  const configValidationFailure = /unknown key|unrecognized|invalid config|schema|validation|openclaw\.json/i.test(message);
+  if (!pairingFailure && !configValidationFailure) {
     return false;
   }
   copilotCliRoutedEnabled = false;
-  copilotCliRoutedDisableReason = 'pairing_required';
-  console.warn('[CopilotCLI] disabled for current bridge runtime after CLI pairing/connect failure; using OpenClaw hook fallback.');
+  if (pairingFailure) {
+    copilotCliRoutedDisableReason = 'pairing_required';
+    console.warn('[CopilotCLI] disabled for current bridge runtime after CLI pairing/connect failure; using OpenClaw hook fallback.');
+  } else {
+    copilotCliRoutedDisableReason = 'config_invalid';
+    console.warn('[CopilotCLI] disabled for current bridge runtime after CLI config validation failure; run `openclaw doctor --fix`, then restart gateway/bridge to re-enable CLI-routed delivery.');
+  }
   return true;
 }
 

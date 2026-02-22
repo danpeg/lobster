@@ -25,12 +25,42 @@ function runCommand(cmd, args, options = {}) {
     ok: result.status === 0,
     code: result.status,
     error: result.error,
+    stdout: typeof result.stdout === 'string' ? result.stdout : String(result.stdout || ''),
+    stderr: typeof result.stderr === 'string' ? result.stderr : String(result.stderr || ''),
   };
 }
 
 function commandExists(cmd) {
   const result = spawnSync('bash', ['-lc', `command -v ${cmd}`], { stdio: 'ignore' });
   return result.status === 0;
+}
+
+function summarizeCommandFailure(result) {
+  const parts = [];
+  if (result?.error?.message) parts.push(result.error.message);
+  if (typeof result?.stderr === 'string' && result.stderr.trim()) parts.push(result.stderr.trim());
+  if (typeof result?.stdout === 'string' && result.stdout.trim()) parts.push(result.stdout.trim());
+  return parts.join('\n').slice(0, 500);
+}
+
+function maybeRunOpenClawDoctorFix() {
+  const doctor = runCommand('openclaw', ['doctor', '--fix'], { stdio: 'pipe' });
+  if (doctor.ok) {
+    return { attempted: true, ok: true, reason: '' };
+  }
+
+  const details = summarizeCommandFailure(doctor);
+  const doctorUnsupported = /unknown command|unknown option|not a valid command|unrecognized option|did you mean/i.test(details)
+    && /doctor/i.test(details);
+  if (doctorUnsupported) {
+    return { attempted: false, ok: true, reason: 'openclaw doctor is not available on this OpenClaw version' };
+  }
+
+  return {
+    attempted: true,
+    ok: false,
+    reason: details || 'openclaw doctor --fix failed',
+  };
 }
 
 function failWithRemediation(stepNum, action, message, remediation) {
@@ -412,6 +442,23 @@ async function runSetup(args) {
       'Remediation: install/open OpenClaw CLI, then rerun `npx @clawpilot/cli setup`.'
     );
   }
+
+  const doctorFix = maybeRunOpenClawDoctorFix();
+  if (doctorFix.attempted && doctorFix.ok) {
+    console.log('[setup] OpenClaw config repair check: doctor --fix OK');
+  } else if (!doctorFix.ok) {
+    const looksSchemaConfigFailure = /schema|unknown key|unrecognized|invalid config|openclaw\.json|validation/i.test(doctorFix.reason || '');
+    if (looksSchemaConfigFailure) {
+      failWithRemediation(
+        3,
+        'Install plugin',
+        `OpenClaw config validation failed and automatic repair did not complete: ${doctorFix.reason}`,
+        'Remediation: run `openclaw doctor --fix`, confirm it succeeds, then rerun `npx @clawpilot/cli setup --fresh`.'
+      );
+    }
+    console.warn(`[setup] OpenClaw doctor --fix check skipped/failed: ${doctorFix.reason}`);
+  }
+
   let installPlugin = runCommand('openclaw', ['plugins', 'install', pluginInstallSpec]);
   if (!installPlugin.ok) {
     runCommand('openclaw', ['plugins', 'uninstall', 'clawpilot']);
