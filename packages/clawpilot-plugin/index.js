@@ -353,6 +353,18 @@ async function runSetupAssistant(api, options = {}) {
   }
   lines.push(`Step 4/7: Cloudflared quick tunnel -> OK (${tunnelUrl})`);
 
+  const hookTokenSet = Boolean(localHealth.body?.hook?.token_set);
+  if (!hookTokenSet) {
+    lines.push('Step 5/7: OpenClaw hook token -> ACTION REQUIRED');
+    lines.push('Bridge is receiving transcripts but cannot deliver mirrored/copilot output because hooks.token is missing.');
+    lines.push('Run locally:');
+    lines.push('openclaw config set hooks.path /hooks');
+    lines.push('openclaw config set hooks.token <random-secret>');
+    lines.push('openclaw daemon restart');
+    lines.push('Then restart the bridge process and rerun /clawpilot install.');
+    return lines.join('\n');
+  }
+
   let bridgeToken = current.bridgeToken;
   if (!bridgeToken) {
     const envToken = await runSystemCommand(api, ['printenv', 'BRIDGE_API_TOKEN']);
