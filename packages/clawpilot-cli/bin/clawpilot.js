@@ -224,6 +224,9 @@ async function ensureBridgeRuntimeSecrets(envFile) {
     setEnvValue(envFile, 'WEBHOOK_SECRET', webhookSecret);
   }
 
+  // v1 default: prefer local hook path over CLI-routed delivery to avoid CLI pairing drift.
+  setEnvValue(envFile, 'OPENCLAW_COPILOT_CLI_ROUTED', 'false');
+
   return { ok: true };
 }
 

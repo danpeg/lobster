@@ -144,12 +144,12 @@ const RECALL_BOTS_ENDPOINT = `${RECALL_API_BASE}/api/v1/bot`;
 const DEFAULT_RECALL_LANGUAGE = process.env.RECALL_LANGUAGE_CODE || 'en';
 const DEFAULT_RECALL_STT_MODE = process.env.RECALL_STT_MODE || 'prioritize_low_latency';
 const OPENCLAW_HOOK_URL = String(process.env.OPENCLAW_HOOK_URL || OPENCLAW_HOOK_DEFAULTS.hookUrl || 'http://127.0.0.1:18789/hooks/wake').trim();
-const OPENCLAW_HOOK_TOKEN = String(process.env.OPENCLAW_HOOK_TOKEN || OPENCLAW_HOOK_DEFAULTS.hookToken || '').trim();
+let OPENCLAW_HOOK_TOKEN = String(process.env.OPENCLAW_HOOK_TOKEN || OPENCLAW_HOOK_DEFAULTS.hookToken || '').trim();
 const OPENCLAW_AGENT_NAME_DEFAULT = sanitizeBotName(OPENCLAW_HOOK_DEFAULTS.agentName || '');
 const OPENCLAW_HOOK_URL_SOURCE = process.env.OPENCLAW_HOOK_URL
   ? 'env'
   : (OPENCLAW_HOOK_DEFAULTS.hookUrl ? 'openclaw.json' : 'builtin-default');
-const OPENCLAW_HOOK_TOKEN_SOURCE = process.env.OPENCLAW_HOOK_TOKEN
+let OPENCLAW_HOOK_TOKEN_SOURCE = process.env.OPENCLAW_HOOK_TOKEN
   ? 'env'
   : (OPENCLAW_HOOK_DEFAULTS.hookToken ? 'openclaw.json' : 'missing');
 const REPLACE_ACTIVE_ON_DUPLICATE = process.env.REPLACE_ACTIVE_ON_DUPLICATE !== 'false';
@@ -179,6 +179,8 @@ const OPENCLAW_CLI_BIN = String(process.env.OPENCLAW_CLI_BIN || 'openclaw').trim
 const OPENCLAW_COPILOT_CLI_ROUTED = parseBooleanLike(process.env.OPENCLAW_COPILOT_CLI_ROUTED, false);
 const OPENCLAW_AGENT_CLI_TIMEOUT_MS = Number(process.env.OPENCLAW_AGENT_CLI_TIMEOUT_MS || 45000);
 const OPENCLAW_MESSAGE_CLI_TIMEOUT_MS = Number(process.env.OPENCLAW_MESSAGE_CLI_TIMEOUT_MS || 20000);
+let copilotCliRoutedEnabled = OPENCLAW_COPILOT_CLI_ROUTED;
+let copilotCliRoutedDisableReason = '';
 const WEBHOOK_EVENT_ID_TTL_MS = Number(process.env.WEBHOOK_EVENT_ID_TTL_MS || 10 * 60 * 1000);
 const WEBHOOK_EVENT_ID_MAX = Number(process.env.WEBHOOK_EVENT_ID_MAX || 5000);
 const BRIDGE_STATE_FILE_RAW = String(process.env.BRIDGE_STATE_FILE || '.bridge-state.json').trim();
@@ -300,6 +302,41 @@ function safeParseJson(raw) {
   } catch {
     return null;
   }
+}
+
+function summarizeHookResultForLog(result) {
+  if (!result) return 'unknown';
+  if (typeof result.error === 'string' && result.error.trim()) return result.error.trim();
+  if (typeof result.message === 'string' && result.message.trim()) return result.message.trim();
+  if (typeof result.raw === 'string' && result.raw.trim()) return result.raw.trim().slice(0, 180);
+  return JSON.stringify(result).slice(0, 180);
+}
+
+function refreshOpenClawHookTokenFromConfig(reason = '') {
+  if (process.env.OPENCLAW_HOOK_TOKEN) return false;
+  const latestDefaults = readOpenClawHookDefaults();
+  const nextToken = String(latestDefaults.hookToken || '').trim();
+  if (!nextToken || nextToken === OPENCLAW_HOOK_TOKEN) {
+    return false;
+  }
+  OPENCLAW_HOOK_TOKEN = nextToken;
+  OPENCLAW_HOOK_TOKEN_SOURCE = 'openclaw.json(runtime-refresh)';
+  console.warn(
+    `[OpenClawHook] refreshed hooks token from ${latestDefaults.configPath}${reason ? ` after ${reason}` : ''}`
+  );
+  return true;
+}
+
+function maybeDisableCopilotCliRouted(error) {
+  if (!copilotCliRoutedEnabled) return false;
+  const message = String(error?.message || error || '');
+  if (!/pairing required|gateway connect failed/i.test(message)) {
+    return false;
+  }
+  copilotCliRoutedEnabled = false;
+  copilotCliRoutedDisableReason = 'pairing_required';
+  console.warn('[CopilotCLI] disabled for current bridge runtime after CLI pairing/connect failure; using OpenClaw hook fallback.');
+  return true;
 }
 
 const seenWebhookEventIds = new Map();
@@ -593,16 +630,31 @@ async function tryDirectDelivery(routeTarget, content) {
 }
 
 async function postToOpenClawJson(url, payload) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${OPENCLAW_HOOK_TOKEN}`,
+  const requestPayload = JSON.stringify(payload);
+  const sendWithToken = async (token) => {
+    const headers = {
       "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload)
-  });
-  const raw = await response.text();
-  const result = safeParseJson(raw) || { ok: response.ok, raw };
+    };
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+    const response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: requestPayload
+    });
+    const raw = await response.text();
+    const result = safeParseJson(raw) || { ok: response.ok, raw };
+    return { response, result };
+  };
+
+  if (!OPENCLAW_HOOK_TOKEN) {
+    refreshOpenClawHookTokenFromConfig('missing token');
+  }
+  let { response, result } = await sendWithToken(OPENCLAW_HOOK_TOKEN);
+  if (response.status === 401 && refreshOpenClawHookTokenFromConfig('401 unauthorized')) {
+    ({ response, result } = await sendWithToken(OPENCLAW_HOOK_TOKEN));
+  }
   return { response, result };
 }
 
@@ -740,13 +792,14 @@ async function sendVerboseMirrorToOpenClaw(line, options = {}) {
   try {
     // Always prefer direct CLI delivery for mirrored transcript lines when routed.
     // This bypasses hook-path NO_REPLY/suppression and keeps transcript mirroring reliable.
-    if (routeTarget?.channel && routeTarget?.to) {
+    if (copilotCliRoutedEnabled && routeTarget?.channel && routeTarget?.to) {
       try {
         await deliverTextViaCli(routeTarget, line);
         const elapsed = Date.now() - sendStart;
         console.log(`[VerboseMirror] ${elapsed}ms - delivered_cli route=${routeText}`);
         return { ok: true };
       } catch (cliError) {
+        maybeDisableCopilotCliRouted(cliError);
         console.warn(`[VerboseMirror] cli path failed route=${routeText} error=${cliError.message} fallback=openclaw`);
       }
     }
@@ -781,6 +834,11 @@ async function sendVerboseMirrorToOpenClaw(line, options = {}) {
     if (routeTarget?.to) payload.to = routeTarget.to;
 
     const { response, result } = await postToOpenClawJson(OPENCLAW_AGENT_HOOK_URL, payload);
+    if (!response.ok) {
+      console.warn(
+        `[VerboseMirror] openclaw hook rejected route=${routeText} status=${response.status} detail=${summarizeHookResultForLog(result)}`
+      );
+    }
 
     const elapsed = Date.now() - sendStart;
     const usedFallback = direct?.attempted || direct?.reason === 'not_configured';
@@ -1578,6 +1636,12 @@ app.get('/health', (req, res) => {
       url_source: OPENCLAW_HOOK_URL_SOURCE,
       token_source: OPENCLAW_HOOK_TOKEN_SOURCE
     },
+    copilot_cli: {
+      configured: OPENCLAW_COPILOT_CLI_ROUTED,
+      enabled: copilotCliRoutedEnabled,
+      disabled_reason: copilotCliRoutedDisableReason || null,
+      bin: OPENCLAW_CLI_BIN
+    },
     discord: {
       direct_delivery: DISCORD_DIRECT_DELIVERY,
       token_set: Boolean(DISCORD_BOT_TOKEN),
@@ -1643,6 +1707,12 @@ app.get('/copilot/status', requireBridgeAuth, (req, res) => {
       token_set: Boolean(OPENCLAW_HOOK_TOKEN),
       url_source: OPENCLAW_HOOK_URL_SOURCE,
       token_source: OPENCLAW_HOOK_TOKEN_SOURCE
+    },
+    copilot_cli: {
+      configured: OPENCLAW_COPILOT_CLI_ROUTED,
+      enabled: copilotCliRoutedEnabled,
+      disabled_reason: copilotCliRoutedDisableReason || null,
+      bin: OPENCLAW_CLI_BIN
     },
     discord: {
       direct_delivery: DISCORD_DIRECT_DELIVERY,
@@ -2770,7 +2840,7 @@ async function sendToOpenClaw(message, options = {}) {
   try {
     // Routed delivery via OpenClaw hooks may resolve to NO_REPLY. Use the CLI pipeline first so
     // we can get model output synchronously and send it directly to the target channel.
-    if (OPENCLAW_COPILOT_CLI_ROUTED && routeTarget?.channel && routeTarget?.to) {
+    if (copilotCliRoutedEnabled && routeTarget?.channel && routeTarget?.to) {
       try {
         const copilotText = await generateCopilotTextViaCli(text, routeTarget);
         const guarded = applyPrivacyOutputGuard(copilotText, sessionId);
@@ -2779,6 +2849,7 @@ async function sendToOpenClaw(message, options = {}) {
         console.log(`[FastInject] ${elapsed}ms - delivered_cli route=${routeText}`);
         return elapsed;
       } catch (cliError) {
+        maybeDisableCopilotCliRouted(cliError);
         console.warn(`[FastInject] cli path failed route=${routeText} error=${cliError.message} fallback=openclaw`);
         if (getSessionAudience(sessionId) === 'shared') {
           // In shared mode, avoid fallback model paths when the guarded CLI path fails.
@@ -2810,6 +2881,7 @@ async function sendToOpenClaw(message, options = {}) {
     }
 
     let response;
+    let result;
     if (routeTarget?.channel && routeTarget?.to) {
       const payload = {
         message: text,
@@ -2819,9 +2891,14 @@ async function sendToOpenClaw(message, options = {}) {
         channel: routeTarget.channel,
         to: routeTarget.to
       };
-      ({ response } = await postToOpenClawJson(OPENCLAW_AGENT_HOOK_URL, payload));
+      ({ response, result } = await postToOpenClawJson(OPENCLAW_AGENT_HOOK_URL, payload));
     } else {
-      ({ response } = await postToOpenClawJson(OPENCLAW_HOOK_URL, { text, mode: "now" }));
+      ({ response, result } = await postToOpenClawJson(OPENCLAW_HOOK_URL, { text, mode: "now" }));
+    }
+    if (!response.ok) {
+      console.warn(
+        `[FastInject] openclaw hook rejected route=${routeText} status=${response.status} detail=${summarizeHookResultForLog(result)}`
+      );
     }
 
     const elapsed = Date.now() - sendStart;
@@ -3007,6 +3084,7 @@ const server = app.listen(PORT, HOST, () => {
   console.log('Webhook URL: managed by cloudflared quick tunnel (dynamic per runtime)');
   console.log(`Health check: http://localhost:${PORT}/health`);
   console.log(`[Tunnel] binary=${CLOUDFLARED_BIN}`);
+  console.log(`[CopilotCLI] configured=${OPENCLAW_COPILOT_CLI_ROUTED} enabled=${copilotCliRoutedEnabled} bin=${OPENCLAW_CLI_BIN}`);
   console.log(`[OpenClawHook] wake=${OPENCLAW_HOOK_URL} agent=${OPENCLAW_AGENT_HOOK_URL}`);
   console.log(`[BridgeAuth] ${BRIDGE_AUTH_ENABLED ? 'enabled' : 'disabled'}${BRIDGE_AUTH_ENABLED ? '' : ' (set BRIDGE_API_TOKEN to enforce bearer auth on bridge control routes)'}`);
   console.log(`[OpenClawHook] token=${OPENCLAW_HOOK_TOKEN ? 'set' : 'missing'} url_source=${OPENCLAW_HOOK_URL_SOURCE} token_source=${OPENCLAW_HOOK_TOKEN_SOURCE}`);
