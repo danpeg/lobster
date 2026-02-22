@@ -905,7 +905,8 @@ const COPILOT_RESPONSE_REQUIREMENT = [
   '[RESPONSE REQUIREMENT]',
   'Reply now with exactly one short, helpful message to the host.',
   'If transcript is unclear, briefly say you are listening and ask one concise clarifying question.',
-  'Never return an empty response.'
+  'Never return an empty response.',
+  'Do not return NO_REPLY, SILENT_REPLY, HEARTBEAT_OK, or any placeholder token.'
 ].join('\n');
 const selectedProactivity = PROACTIVITY_PRESETS[PROACTIVITY_LEVEL] || PROACTIVITY_PRESETS.high;
 const REACT_ON_PARTIAL = parseBooleanLike(process.env.REACT_ON_PARTIAL, false);
