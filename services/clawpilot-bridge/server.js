@@ -181,6 +181,7 @@ const OPENCLAW_AGENT_CLI_TIMEOUT_MS = Number(process.env.OPENCLAW_AGENT_CLI_TIME
 const OPENCLAW_MESSAGE_CLI_TIMEOUT_MS = Number(process.env.OPENCLAW_MESSAGE_CLI_TIMEOUT_MS || 20000);
 let copilotCliRoutedEnabled = OPENCLAW_COPILOT_CLI_ROUTED;
 let copilotCliRoutedDisableReason = '';
+let hasWarnedHooksMethodNotAllowed = false;
 const WEBHOOK_EVENT_ID_TTL_MS = Number(process.env.WEBHOOK_EVENT_ID_TTL_MS || 10 * 60 * 1000);
 const WEBHOOK_EVENT_ID_MAX = Number(process.env.WEBHOOK_EVENT_ID_MAX || 5000);
 const BRIDGE_STATE_FILE_RAW = String(process.env.BRIDGE_STATE_FILE || '.bridge-state.json').trim();
@@ -337,6 +338,17 @@ function maybeDisableCopilotCliRouted(error) {
   copilotCliRoutedDisableReason = 'pairing_required';
   console.warn('[CopilotCLI] disabled for current bridge runtime after CLI pairing/connect failure; using OpenClaw hook fallback.');
   return true;
+}
+
+function maybeWarnHooksMethodNotAllowed(response, result) {
+  if (hasWarnedHooksMethodNotAllowed) return;
+  if (!response || response.status !== 405) return;
+  const detail = summarizeHookResultForLog(result).toLowerCase();
+  if (!detail.includes('method not allowed')) return;
+  hasWarnedHooksMethodNotAllowed = true;
+  console.warn(
+    '[OpenClawHook] received 405 Method Not Allowed. Ensure OpenClaw hooks are enabled: `openclaw config set hooks.enabled true` then restart daemon/bridge.'
+  );
 }
 
 const seenWebhookEventIds = new Map();
@@ -834,6 +846,7 @@ async function sendVerboseMirrorToOpenClaw(line, options = {}) {
     if (routeTarget?.to) payload.to = routeTarget.to;
 
     const { response, result } = await postToOpenClawJson(OPENCLAW_AGENT_HOOK_URL, payload);
+    maybeWarnHooksMethodNotAllowed(response, result);
     if (!response.ok) {
       console.warn(
         `[VerboseMirror] openclaw hook rejected route=${routeText} status=${response.status} detail=${summarizeHookResultForLog(result)}`
@@ -2895,6 +2908,7 @@ async function sendToOpenClaw(message, options = {}) {
     } else {
       ({ response, result } = await postToOpenClawJson(OPENCLAW_HOOK_URL, { text, mode: "now" }));
     }
+    maybeWarnHooksMethodNotAllowed(response, result);
     if (!response.ok) {
       console.warn(
         `[FastInject] openclaw hook rejected route=${routeText} status=${response.status} detail=${summarizeHookResultForLog(result)}`

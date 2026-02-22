@@ -138,10 +138,19 @@ function ensureOpenClawHooksConfigured() {
   const plugins = config && typeof config.plugins === 'object' && config.plugins ? config.plugins : {};
   const currentToken = String(hooks.token || '').trim();
   const currentPath = String(hooks.path || '').trim();
+  const hooksEnabled = hooks.enabled === true;
   const currentAllow = Array.isArray(plugins.allow)
     ? plugins.allow.filter((entry) => typeof entry === 'string').map((entry) => entry.trim()).filter(Boolean)
     : [];
-  const changes = { pathSet: false, tokenSet: false, pluginsAllowSet: false };
+  const changes = { enabledSet: false, pathSet: false, tokenSet: false, pluginsAllowSet: false };
+
+  if (!hooksEnabled) {
+    const setEnabled = runCommand('openclaw', ['config', 'set', 'hooks.enabled', 'true']);
+    if (!setEnabled.ok) {
+      return { ok: false, reason: 'failed to set hooks.enabled' };
+    }
+    changes.enabledSet = true;
+  }
 
   if (!currentPath) {
     const setPath = runCommand('openclaw', ['config', 'set', 'hooks.path', '/hooks']);
@@ -424,7 +433,7 @@ async function runSetup(args) {
       4,
       'Restart gateway',
       `Failed to configure OpenClaw hooks for bridge delivery: ${hooksConfig.reason || 'unknown error'}`,
-      'Remediation: run `openclaw config set hooks.path /hooks`, `openclaw config set hooks.token <random>`, and `openclaw config set plugins.allow \'["clawpilot"]\'`, then rerun setup.'
+      'Remediation: run `openclaw config set hooks.enabled true`, `openclaw config set hooks.path /hooks`, `openclaw config set hooks.token <random>`, and `openclaw config set plugins.allow \'["clawpilot"]\'`, then rerun setup.'
     );
   }
 
@@ -438,10 +447,10 @@ async function runSetup(args) {
       'Remediation: run `openclaw daemon restart` manually, then rerun setup.'
     );
   }
-  if (hooksConfig.pathSet || hooksConfig.tokenSet || hooksConfig.pluginsAllowSet) {
+  if (hooksConfig.enabledSet || hooksConfig.pathSet || hooksConfig.tokenSet || hooksConfig.pluginsAllowSet) {
     passStep(
       4,
-      `Restart gateway (hooks configured: path=${hooksConfig.pathSet ? 'set' : 'ok'}, token=${hooksConfig.tokenSet ? 'set' : 'ok'}, plugins.allow=${hooksConfig.pluginsAllowSet ? 'set' : 'ok'})`
+      `Restart gateway (hooks configured: enabled=${hooksConfig.enabledSet ? 'set' : 'ok'}, path=${hooksConfig.pathSet ? 'set' : 'ok'}, token=${hooksConfig.tokenSet ? 'set' : 'ok'}, plugins.allow=${hooksConfig.pluginsAllowSet ? 'set' : 'ok'})`
     );
   } else {
     passStep(4, 'Restart gateway');
