@@ -135,9 +135,13 @@ function ensureOpenClawHooksConfigured() {
   const configPath = process.env.OPENCLAW_CONFIG_PATH || path.join(os.homedir(), '.openclaw', 'openclaw.json');
   const config = readJsonFile(configPath) || {};
   const hooks = config && typeof config.hooks === 'object' && config.hooks ? config.hooks : {};
+  const plugins = config && typeof config.plugins === 'object' && config.plugins ? config.plugins : {};
   const currentToken = String(hooks.token || '').trim();
   const currentPath = String(hooks.path || '').trim();
-  const changes = { pathSet: false, tokenSet: false };
+  const currentAllow = Array.isArray(plugins.allow)
+    ? plugins.allow.filter((entry) => typeof entry === 'string').map((entry) => entry.trim()).filter(Boolean)
+    : [];
+  const changes = { pathSet: false, tokenSet: false, pluginsAllowSet: false };
 
   if (!currentPath) {
     const setPath = runCommand('openclaw', ['config', 'set', 'hooks.path', '/hooks']);
@@ -154,6 +158,15 @@ function ensureOpenClawHooksConfigured() {
       return { ok: false, reason: 'failed to set hooks.token' };
     }
     changes.tokenSet = true;
+  }
+
+  if (!currentAllow.includes('clawpilot')) {
+    const nextAllow = [...new Set([...currentAllow, 'clawpilot'])];
+    const setAllow = runCommand('openclaw', ['config', 'set', 'plugins.allow', JSON.stringify(nextAllow)]);
+    if (!setAllow.ok) {
+      return { ok: false, reason: 'failed to set plugins.allow' };
+    }
+    changes.pluginsAllowSet = true;
   }
 
   return { ok: true, ...changes };
@@ -408,7 +421,7 @@ async function runSetup(args) {
       4,
       'Restart gateway',
       `Failed to configure OpenClaw hooks for bridge delivery: ${hooksConfig.reason || 'unknown error'}`,
-      'Remediation: run `openclaw config set hooks.path /hooks` and `openclaw config set hooks.token <random>`, then rerun setup.'
+      'Remediation: run `openclaw config set hooks.path /hooks`, `openclaw config set hooks.token <random>`, and `openclaw config set plugins.allow \'["clawpilot"]\'`, then rerun setup.'
     );
   }
 
@@ -422,10 +435,10 @@ async function runSetup(args) {
       'Remediation: run `openclaw daemon restart` manually, then rerun setup.'
     );
   }
-  if (hooksConfig.pathSet || hooksConfig.tokenSet) {
+  if (hooksConfig.pathSet || hooksConfig.tokenSet || hooksConfig.pluginsAllowSet) {
     passStep(
       4,
-      `Restart gateway (hooks configured: path=${hooksConfig.pathSet ? 'set' : 'ok'}, token=${hooksConfig.tokenSet ? 'set' : 'ok'})`
+      `Restart gateway (hooks configured: path=${hooksConfig.pathSet ? 'set' : 'ok'}, token=${hooksConfig.tokenSet ? 'set' : 'ok'}, plugins.allow=${hooksConfig.pluginsAllowSet ? 'set' : 'ok'})`
     );
   } else {
     passStep(4, 'Restart gateway');
