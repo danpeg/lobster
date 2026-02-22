@@ -760,7 +760,9 @@ function inferAgentName(api, ctx) {
 
 function buildRouteTarget(ctx) {
   const channel = sanitizeAgentName(ctx?.channelId || ctx?.channel).toLowerCase();
-  const to = sanitizeAgentName(ctx?.to || ctx?.from);
+  // Prefer conversation/chat id so routed delivery targets the active user thread.
+  // Fallback to sender before recipient to avoid self-targeting in direct-message channels.
+  const to = sanitizeAgentName(ctx?.conversationId || ctx?.from || ctx?.to);
   if (!channel || !to) return null;
 
   const target = { channel, to };
@@ -776,6 +778,7 @@ function summarizeRouteContext(ctx) {
   return {
     channel: sanitizeAgentName(ctx?.channel),
     channelId: sanitizeAgentName(ctx?.channelId),
+    conversationId: sanitizeAgentName(ctx?.conversationId),
     to: sanitizeAgentName(ctx?.to),
     from: sanitizeAgentName(ctx?.from),
     senderId: sanitizeAgentName(ctx?.senderId),
@@ -795,7 +798,7 @@ function parseThreadId(value) {
 
 function buildOwnerBinding(ctx) {
   const channel = sanitizeAgentName(ctx?.channelId || ctx?.channel).toLowerCase();
-  const to = sanitizeAgentName(ctx?.to || ctx?.from);
+  const to = sanitizeAgentName(ctx?.conversationId || ctx?.from || ctx?.to);
   if (!channel || !to) return null;
   const ownerBinding = {
     channel,
